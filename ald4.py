@@ -1,3 +1,6 @@
+# app.py
+
+import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
@@ -8,69 +11,81 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-# --- 1. 실제 데이터 로드 및 정제 ---
-try:
+# --- 데이터 로딩 및 모델 학습 함수 (캐시 사용으로 속도 향상) ---
+@st.cache_data
+def load_and_train_model():
+    # 1. 실제 데이터 로드 및 정제
     file_name = 'HCDS Data sample - HCDS Data Sample.csv'
     df = pd.read_csv(file_name, encoding='cp949')
     
-    # 데이터 정제 (이전 단계에서 확정된 로직)
     if 'T Level' in df.columns:
         df = df.drop(columns=['T Level'])
     for col in df.columns:
         df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)', expand=False), errors='coerce')
     df.dropna(inplace=True)
     
-    print("--- 'HCDS Data sample - HCDS Data Sample.csv' 파일 로드 및 정제 완료 ---")
-
-    # AI 모델 학습: Depo Rate를 예측하도록 설정
+    # AI 모델 학습
     features = ['T (oC)', 'P (mTorr)', 'F (sccm)']
     target = 'Depo Rate (nm/cycle)'
     X = df[features]
     y = df[target]
     model = RandomForestRegressor(n_estimators=100, random_state=42).fit(X, y)
-    print("--- 실제 데이터 기반 AI 모델 학습 완료 ---")
+    
+    return model, X
 
-    # --- 2. 사용자 목표값 입력 ---
-    target_depth = float(input("목표 Deposition Rate (nm/cycle)를 입력하세요: "))
+# --- 웹 UI 구성 ---
+st.title('🤖 ALD 공정 최적 조건 추천 AI')
 
-    # --- 3. 베이즈 최적화를 위한 설정 ---
-    # 탐색할 변수들의 범위를 정의합니다.
+# 모델 로드 및 학습
+model, X = load_and_train_model()
+
+st.sidebar.header('목표 조건 입력')
+target_depth = st.sidebar.number_input(
+    '목표 Deposition Rate (nm/cycle)를 입력하세요:', 
+    min_value=0.01, 
+    max_value=0.20, 
+    value=0.10, 
+    step=0.01
+)
+
+# 최적화 실행 버튼
+if st.sidebar.button('최적 조건 계산하기'):
+
+    # --- 베이즈 최적화 실행 ---
     search_space = [
         Real(X['T (oC)'].min(), X['T (oC)'].max(), name='T (oC)'),
         Real(X['P (mTorr)'].min(), X['P (mTorr)'].max(), name='P (mTorr)'),
         Real(X['F (sccm)'].min(), X['F (sccm)'].max(), name='F (sccm)')
     ]
 
-    # 최적화할 목적 함수 정의
     @use_named_args(search_space)
     def objective_function(**params):
         input_df = pd.DataFrame([params])
         predicted_depth = model.predict(input_df)[0]
         return (predicted_depth - target_depth)**2
 
-    # --- 4. 베이즈 최적화 실행 ---
-    print("\n--- 베이즈 최적화 시작 (최적 조건 탐색 중...) ---")
-    result = gp_minimize(
-        func=objective_function,
-        dimensions=search_space,
-        n_calls=50, # 50번의 지능적인 탐색 시도
-        random_state=42
-    )
+    with st.spinner('AI가 최적 조건을 탐색 중입니다...'):
+        result = gp_minimize(
+            func=objective_function,
+            dimensions=search_space,
+            n_calls=50,
+            random_state=42
+        )
     
-    # --- 5. 최종 결과 출력 ---
     optimal_conditions = result.x
     final_predicted_depth = np.sqrt(result.fun) + target_depth
 
-    print("\n" + "="*50)
-    print("     AI가 추천하는 최적 공정 레시피 (베이즈 최적화)")
-    print("="*50)
-    print(f"\n> 사용자가 요청한 목표 Depo Rate: {target_depth:.4f} nm/cycle")
-    print(f"> AI가 찾은 최적 조건에서의 예상 Depo Rate: {final_predicted_depth:.4f} nm/cycle")
-    print("\n> 추천 최적 조건 (정밀):")
-    for dim, value in zip(search_space, optimal_conditions):
-        print(f"  - **{dim.name}: {value:.2f}**")
+    st.success('최적 조건 탐색 완료!')
+    
+    # --- 최종 결과 출력 ---
+    st.header('AI 추천 최적 공정 레시피')
+    st.metric(label="요청한 목표 Depo Rate", value=f"{target_depth:.4f} nm/cycle")
+    st.metric(label="AI 예상 최적 Depo Rate", value=f"{final_predicted_depth:.4f} nm/cycle")
 
-except FileNotFoundError:
-    print(f"오류: '{file_name}' 파일을 찾을 수 없습니다.")
-except Exception as e:
-    print(f"데이터 처리 중 오류가 발생했습니다: {e}")
+    st.subheader('추천 최적 조건 (정밀)')
+    results_df = pd.DataFrame([optimal_conditions], columns=[dim.name for dim in search_space])
+    results_df = results_df.round(2)
+    st.dataframe(results_df)
+
+else:
+    st.info('왼쪽 사이드바에서 목표 조건을 입력하고 버튼을 눌러주세요.')
