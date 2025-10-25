@@ -4,3 +4,5 @@ scikit-learn
 xgboost
 numpy
 lxml
+beautifulsoup4
+html5lib
