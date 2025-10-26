@@ -3,6 +3,7 @@ pandas
 scikit-learn
 xgboost
 numpy
-lxml
-beautifulsoup4
-html5lib
+requests
+openpyxl
+google-search-results
+pdfplumber
