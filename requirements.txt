@@ -1,6 +1,7 @@
 pandas
 numpy
+torch
+scipy
 scikit-learn
-tensorflow
-keras
 joblib
+streamlit

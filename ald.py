@@ -1,295 +1,394 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset, random_split
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+from sklearn.exceptions import NotFittedError
 import joblib
-import tensorflow as tf
-import re
-import plotly.graph_objects as go
-import os
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, MinMaxScaler
-from sklearn.compose import ColumnTransformer
-from tensorflow.keras.models import Sequential, save_model, load_model
-from tensorflow.keras.layers import Dense, Dropout
-from tensorflow.keras.optimizers.schedules import ExponentialDecay
+import os  
+from scipy.optimize import minimize
+import random
+import sys
 
-# Keras 로드 시 경고 메시지 방지
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# ==========================================
+# 0. 환경 설정 및 장치 확인
+# ==========================================
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
 
-# --- 0. 전역 변수 및 파일 경로 설정 ---
-DATA_FILE = 'ald_data.csv'  # ⭐ 이 이름으로 파일이 존재해야 합니다.
-MODEL_PATH = 'improved_ald_mimo_model.h5'
-PREPROCESSOR_PATH = 'ald_preprocessor.joblib'
-Y_SCALER_PATH = 'y_minmax_scaler.joblib' 
-
-# 입력/출력 컬럼 정의
-NUMERICAL_FEATURES = [
-    'Precursor_Pulse_Time', 'Co_reactant_Pulse_Time', 'Cycles', 'Temperature',
-    'Pressure', 'Purge_Time', 'Purge_Gas_Flow_Rate', 'Aspect_Ratio'
-]
-CATEGORICAL_FEATURES = ['Precursor', 'Co-reactant', 'Purge Gas']
-X_COLS_ORDER = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
-
-TARGET_FEATURES = ['Thickness', 'Step_Coverage', 'Uniformity_Range', 'GPC', 'Density']
-TARGET_FEATURES_DISPLAY = {
-    'Thickness': 'Thickness (nm)', 
-    'Step_Coverage': 'Step Coverage (%)', 
-    'Uniformity_Range': 'Uniformity Range (%)', 
-    'GPC': 'GPC (A/cycle)', 
-    'Density': 'Density (g/cm³)'
-}
-DEFAULT_PRECURSORS = ['TMA', 'SiH4', 'TiCl4']
-DEFAULT_COREACTANTS = ['H2O', 'O2', 'O3 + N2']
-DEFAULT_PURGE_GASES = ['N2', 'Ar']
-
-
-# --- 안전한 NumPy 배열 변환 함수 ---
-def to_dense(X):
-    if hasattr(X, 'toarray'):
-        return X.toarray()
-    return X
-
-
-# --- 1. 데이터 클리닝 및 모델 학습/저장 로직 (함수들) ---
-
-def normalize_col_name(col):
-    # 파일명 클리닝 로직 (생략하지 않고 완전하게 포함)
-    col_name = re.sub(r'\s*\([^)]*\)', '', col).strip() 
-    col_name = re.sub(r'[^a-zA-Z0-9_]', '_', col_name).strip('_')
-    
-    if 'Precursor' == col_name or 'Precursor_Pulse_Time' in col_name: return 'Precursor_Pulse_Time' if 'Pulse_Time' in col_name else 'Precursor'
-    if 'Co_reactant' == col_name or 'Co_reactant_Pulse_Time' in col_name: return 'Co_reactant_Pulse_Time' if 'Pulse_Time' in col_name else 'Co-reactant'
-    if 'Purge_Gas' == col_name: return 'Purge Gas'
-    if 'Temperature' in col_name: return 'Temperature'
-    if 'Pressure' in col_name: return 'Pressure'
-    if 'Aspect_Ratio' in col_name: return 'Aspect_Ratio'
-    if 'Cycles' in col_name: return 'Cycles'
-    if 'Purge_Time' in col_name: return 'Purge_Time'
-    if 'Purge_Gas_Flow_Rate' in col_name: return 'Purge_Gas_Flow_Rate'
-    if 'Thickness' in col_name: return 'Thickness'
-    if 'GPC' in col_name: return 'GPC'
-    if 'Density' in col_name: return 'Density'
-    if 'Uniformity' in col_name: return 'Uniformity_Raw'
-    if 'Step_Coverage' in col_name: return 'Step_Coverage_Raw'
-    
-    return col_name
-
-def clean_data(df_raw):
-    df_raw.columns = [normalize_col_name(col) for col in df_raw.columns]
-    df = df_raw.copy()
-    
-    df = df.drop(columns=['Aspect_Ratio', 'Leakage_Current_Density', 'Dielectric_Constant', 
-                          'Breakdown_Field', 'Paper_Title', 'Surface_Roughness', 
-                          'Precursor_Flow_Rate', 'Co_reactant_Flow_Rate', 'ID'], errors='ignore')
-
-    cols_to_convert = ['Precursor_Pulse_Time', 'Co_reactant_Pulse_Time', 'Cycles', 'Thickness']
-    for col in cols_to_convert:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    def extract_aspect_ratio_from_step_coverage(raw_value):
-        if pd.isna(raw_value): return np.nan
-        s = str(raw_value)
-        if 'AR' in s:
-            match = re.search(r'AR[\s=]*([\d\.\s,]+)', s)
-            if match:
-                number_str = match.group(1).replace(' ', '').replace(',', '')
-                numbers = re.findall(r'[\d\.]+', number_str)
-                float_numbers = [float(n) for n in numbers if n]
-                return max(float_numbers) if float_numbers else np.nan
-        return np.nan
-    
-    if 'Aspect_Ratio' not in df.columns or df['Aspect_Ratio'].isnull().all():
-        df['Aspect_Ratio'] = df['Step_Coverage_Raw'].apply(extract_aspect_ratio_from_step_coverage)
-    else:
-        df['Aspect_Ratio'] = pd.to_numeric(df['Aspect_Ratio'], errors='coerce')
-        df['AR_Extracted'] = df['Step_Coverage_Raw'].apply(extract_aspect_ratio_from_step_coverage)
-        df['Aspect_Ratio'] = df['Aspect_Ratio'].fillna(df['AR_Extracted'])
-        df = df.drop(columns=['AR_Extracted'], errors='ignore')
-
-    def extract_step_coverage_robust(raw_value):
-        if pd.isna(raw_value): return np.nan
-        s = re.sub(r'[^0-9\.\,\-\s\(\)%]', '', str(raw_value).strip()).replace('%', '')
-        numbers = re.findall(r'[\d\.]+', s)
-        try:
-            float_numbers = [float(n) for n in numbers if n]
-            return max(float_numbers) if float_numbers else np.nan
-        except:
-            return np.nan
-    df['Step_Coverage'] = df['Step_Coverage_Raw'].apply(extract_step_coverage_robust)
-    
-    def extract_uniformity_range(raw_value):
-        if pd.isna(raw_value): return np.nan
-        s = re.sub(r'[^\d\.]', '', str(raw_value).strip())
-        try:
-            return float(s)
-        except:
-            return np.nan
-    df['Uniformity_Range'] = df['Uniformity_Raw'].apply(extract_uniformity_range)
-    
-    df = df.drop(columns=['Uniformity_Raw', 'Step_Coverage_Raw'], errors='ignore')
-
-    df_final = df[X_COLS_ORDER + TARGET_FEATURES].copy()
-    df_clean = df_final.dropna(subset=X_COLS_ORDER + TARGET_FEATURES).copy()
-    
-    return df_clean
-
-@st.cache_resource
-def train_and_save_model():
-    """모델 학습 및 파일 저장 (Streamlit 캐시 활용)"""
-    st.info(f"데이터셋 로드 및 AI 모델 학습을 시작합니다. ({DATA_FILE})")
+# ==========================================
+# 1. 데이터 불러오기 및 전처리 (새 파일 및 컬럼명 적용)
+# ==========================================
+try:
+    # 1-1. CSV 파일 읽기 (파일 경로 문제 해결)
+    file_name = 'AI_ALD1.csv.csv'
     
     try:
-        df_raw = pd.read_csv(DATA_FILE, encoding='utf-8')
-    except:
-        df_raw = pd.read_csv(DATA_FILE, encoding='cp949')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        script_dir = os.getcwd() 
+        print("Warning: '__file__' not defined. Using current working directory.")
 
-    df_clean = clean_data(df_raw)
+    file_path = os.path.join(script_dir, file_name)
+    print(f"Attempting to load file from: {file_path}") 
     
-    X_train, X_test, Y_train, Y_test = train_test_split(df_clean[X_COLS_ORDER], df_clean[TARGET_FEATURES], test_size=0.2, random_state=42)
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    #
+    # 💡 [수정] : 인코딩을 'utf-8'에서 'cp949' (한글 Excel)로 변경
+    df = pd.read_csv(file_path, encoding='cp949')
+    #
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-    # 1. X 입력 데이터 전처리 (StandardScaler)
-    numerical_transformer = StandardScaler()
-    categorical_transformer = OneHotEncoder(handle_unknown='ignore')
-    preprocessor = ColumnTransformer(
-        transformers=[('num', numerical_transformer, NUMERICAL_FEATURES),('cat', categorical_transformer, CATEGORICAL_FEATURES)]
-    )
-    X_train_processed = preprocessor.fit_transform(X_train)
-    joblib.dump(preprocessor, PREPROCESSOR_PATH)
+    # 컬럼명 앞/뒤 공백 및 따옴표 제거 (KeyError 방지)
+    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.replace('"', '', regex=False) 
 
-    # 2. Y 타겟 데이터 스케일링 (MinMaxScaler for 0-1 range)
-    Y_scaler = MinMaxScaler()
-    Y_train_scaled = Y_scaler.fit_transform(Y_train)
-    joblib.dump(Y_scaler, Y_SCALER_PATH)
+except FileNotFoundError:
+    print(f"Error: '{file_name}' 파일을 찾을 수 없습니다.")
+    print(f"스크립트와 동일한 폴더 ({script_dir})에 파일이 있는지 확인해주세요.")
+    sys.exit()
+except UnicodeDecodeError:
+    # 혹시 'cp949'도 실패하면 'euc-kr'을 시도하라는 안내
+    print(f"Error: 'cp949' 인코딩으로 파일을 읽지 못했습니다.")
+    print(f"파일을 메모장으로 열어 '다른 이름으로 저장' -> 인코딩을 'UTF-8'로 선택한 뒤 다시 시도해보세요.")
+    sys.exit()
+except Exception as e:
+    print(f"An error occurred while loading the file: {e}")
+    sys.exit()
 
-    # 3. 딥러닝 모델 설계 및 학습
-    input_dim = to_dense(X_train_processed).shape[1] 
-    output_dim = Y_train.shape[1]
-    
-    improved_model = Sequential([
-        Dense(128, activation='relu', input_shape=(input_dim,)),
-        Dropout(0.2), Dense(64, activation='relu'), Dropout(0.2), Dense(32, activation='relu'),
-        Dense(output_dim, activation='relu') 
-    ])
-    improved_model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+print(f"클리닝 후 컬럼 목록: {df.columns.to_list()}")
 
-    # 학습
-    improved_model.fit(to_dense(X_train_processed), Y_train_scaled, epochs=150, batch_size=32, validation_split=0.2, verbose=0)
-    save_model(improved_model, MODEL_PATH)
-    
-    st.success(f"✅ AI 모델 학습 완료! (총 {len(df_clean)}개 데이터 사용)")
-    return improved_model, preprocessor, Y_scaler
+# 1-2. 데이터 클리닝 (수치형 변환) - 새 CSV 컬럼명 기준
+numeric_cols = [
+    'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)',
+    'Temperature (c)', 
+    'Pressure (torr)', 'Purge Time (s)',
+    'Purge Gas Flow Rate (cm3/min)', 
+    'Precursor Flow Rate (cm3/min)',
+    'Co-reactant Flow Rate (cm3/min)',
+    'Thickness (nm)',
+    'GPC (A/cycle)'
+]
 
-# --- 2. AI 예측 함수 (통합) ---
-
-@st.cache_resource
-def load_ai_assets():
-    """모델 파일 로드 또는 학습/생성 후 로드"""
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(PREPROCESSOR_PATH) or not os.path.exists(Y_SCALER_PATH):
-        # 파일이 없으면 학습 함수를 호출하여 파일을 생성합니다.
-        return train_and_save_model()
+# 1-3. '-'를 NaN으로 변경 및 수치형 변환
+print("\n데이터 클리닝 수행 중...")
+for col in numeric_cols:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col].replace('-', np.nan), errors='coerce')
     else:
-        # 파일이 있으면 로드합니다.
-        try:
-            model = tf.keras.models.load_model(MODEL_PATH)
-            preprocessor = joblib.load(PREPROCESSOR_PATH)
-            y_scaler = joblib.load(Y_SCALER_PATH)
-            return model, preprocessor, y_scaler
-        except Exception as e:
-            st.error(f"❌ 저장된 모델 로드 실패. 파일을 삭제하고 재실행하세요. 오류: {e}")
-            st.stop()
+        print(f"Warning: '{col}' 컬럼이 numeric_cols 목록에 있지만 CSV에 존재하지 않습니다.")
 
-def predict_ald_properties(input_df, model, preprocessor, y_scaler):
-    """입력 데이터프레임을 받아 AI 예측을 수행하고 결과를 반환합니다."""
-    # X 입력 전처리
-    X_processed = preprocessor.transform(input_df[X_COLS_ORDER])
-    
-    # 예측 수행
-    Y_predicted_scaled = model.predict(to_dense(X_processed))[0]
-    
-    # 결과 역변환 (실제 물리적 단위로 복원)
-    Y_predicted_original = y_scaler.inverse_transform(Y_predicted_scaled.reshape(1, -1))[0]
-    
-    results_df = pd.DataFrame({'특성': list(TARGET_FEATURES_DISPLAY.values()),'예측 값': [f"{val:.4f}" for val in Y_predicted_original]})
-    
-    return results_df, Y_predicted_original
+# 1-4. 사용할 컬럼만 선택
+categorical_cols = ['Precursor']
+process_cols = [col for col in numeric_cols if col not in ['Thickness (nm)', 'GPC (A/cycle)']]
+output_cols = ['GPC (A/cycle)', 'Thickness (nm)']
 
+all_used_cols = list(set(categorical_cols + process_cols + output_cols).intersection(df.columns))
+df_clean = df[all_used_cols].copy()
 
-# --- 3. Streamlit UI 구성 (메인 실행) ---
+# 1-5. 결측치 처리
+df_clean = df_clean.dropna(subset=output_cols) 
+df_clean[process_cols] = df_clean[process_cols].fillna(0)
+df_clean['Precursor'] = df_clean['Precursor'].fillna('Unknown')
 
-st.set_page_config(page_title="ALD 공정 AI 예측 시스템", layout="wide")
-st.title("🧪 3D 반도체 ALD 공정 AI 예측 시스템")
+if df_clean.empty:
+    print("오류: GPC 또는 Thickness 데이터가 있는 유효한 행이 없습니다. CSV 파일을 확인해주세요.")
+    sys.exit()
 
-# 모델 로드/학습 (가장 먼저 실행되며, Streamlit의 캐시 덕분에 한 번만 실행됨)
-model, preprocessor, y_scaler = load_ai_assets()
+print(f"클리닝 및 전처리 완료. 학습 데이터 {len(df_clean)}개 확보.")
 
-# --- 사이드바: 입력 패널 ---
-with st.sidebar:
-    st.header("공정 조건 입력 (X)")
-    st.markdown("---")
+# 1-6. 범주형(Precursor) 원-핫 인코딩
+encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+precursor_encoded = encoder.fit_transform(df_clean[['Precursor']])
+precursor_columns = encoder.get_feature_names_out(['Precursor'])
+precursor_df = pd.DataFrame(precursor_encoded, columns=precursor_columns, index=df_clean.index)
 
-    # 입력 필드
-    precursor = st.selectbox("Precursor", DEFAULT_PRECURSORS, index=0)
-    co_reactant = st.selectbox("Co-reactant", DEFAULT_COREACTANTS, index=0)
-    purge_gas = st.selectbox("Purge Gas", DEFAULT_PURGE_GASES, index=0)
-    
-    st.markdown("---")
-    st.subheader("수치형 변수")
-    
-    temperature = st.slider("Temperature (℃)", min_value=100, max_value=400, value=300, step=1)
-    pressure = st.number_input("Pressure (torr)", min_value=0.01, max_value=10.0, value=0.3, step=0.01)
-    aspect_ratio = st.number_input("Aspect Ratio (AR)", min_value=1.0, max_value=500.0, value=10.0, step=1.0)
-    
-    st.markdown("---")
-    
-    prec_pulse = st.number_input("Precursor Pulse Time (s)", min_value=0.01, max_value=10.0, value=0.1, step=0.01)
-    co_pulse = st.number_input("Co-reactant Pulse Time (s)", min_value=0.01, max_value=10.0, value=0.1, step=0.01)
-    cycles = st.number_input("Cycles (n)", min_value=1, max_value=1000, value=500, step=10)
-    purge_time = st.number_input("Purge Time (s)", min_value=0.1, max_value=20.0, value=5.0, step=0.1)
-    purge_flow = st.number_input("Purge Gas Flow Rate (ccm)", min_value=50.0, max_value=500.0, value=200.0, step=10.0)
+precursor_map = {chr(97 + i): name.replace('Precursor_', '') for i, name in enumerate(encoder.categories_[0])}
+print(f"Precursor Mapping: {precursor_map}")
 
+# 1-7. 최종 데이터프레임 결합
+df_features = df_clean[process_cols].join(precursor_df)
+df_outputs = df_clean[output_cols]
 
-# --- 메인 페이지: 예측 결과 출력 ---
+# 1-8. 입력(X), 출력(y1=GPC, y2=Thickness) 분리
+X = df_features.values
+y_gpc = df_outputs['GPC (A/cycle)'].values.reshape(-1, 1)
+y_thick = df_outputs['Thickness (nm)'].values.reshape(-1, 1)
 
-# 1. 입력 데이터를 DataFrame으로 통합
-input_data_df = pd.DataFrame({
-    'Precursor_Pulse_Time': [prec_pulse], 'Co_reactant_Pulse_Time': [co_pulse], 'Cycles': [cycles], 'Temperature': [temperature],
-    'Pressure': [pressure], 'Purge_Time': [purge_time], 'Purge_Gas_Flow_Rate': [purge_flow], 'Aspect_Ratio': [aspect_ratio],
-    'Precursor': [precursor], 'Co-reactant': [co_reactant], 'Purge Gas': [purge_gas]
-})
+# 1-9. 스케일링
+scaler_X = MinMaxScaler()
+scaler_y1 = MinMaxScaler() # GPC
+scaler_y2 = MinMaxScaler() # Thickness
 
-# 2. 예측 버튼
-if st.button("AI 예측 계산 실행", type="primary", use_container_width=True):
-    # 예측 함수 호출
-    results_df, Y_predicted_original = predict_ald_properties(input_data_df, model, preprocessor, y_scaler)
+X_scaled = scaler_X.fit_transform(X)
+y_gpc_scaled = scaler_y1.fit_transform(y_gpc)
+y_thick_scaled = scaler_y2.fit_transform(y_thick)
 
-    if results_df is not None:
-        st.subheader("예측된 박막 특성 결과")
-        
-        col1, col2 = st.columns(2)
-        
-        # 3. 테이블 출력
-        with col1:
-            st.dataframe(results_df, hide_index=True, use_container_width=True)
-            st.success("✅ AI 예측 계산 완료")
+# 1-10. 텐서 변환 및 장치 이동
+X_tensor = torch.tensor(X_scaled, dtype=torch.float32).to(device)
+y1_tensor = torch.tensor(y_gpc_scaled, dtype=torch.float32).to(device)
+y2_tensor = torch.tensor(y_thick_scaled, dtype=torch.float32).to(device)
 
-        # 4. Plotly 레이더 차트 출력
-        with col2:
-            fig = go.Figure(data=[
-                go.Scatterpolar(
-                    r=Y_predicted_original,
-                    theta=list(TARGET_FEATURES_DISPLAY.values()),
-                    fill='toself',
-                    name='AI 예측 결과'
-                )
-            ],
-            layout=go.Layout(
-                polar=dict(
-                    radialaxis=dict(visible=True, range=[0, np.max(Y_predicted_original) * 1.2]) 
-                ),
-                showlegend=False,
-                height=450
-            ))
-            st.plotly_chart(fig, use_container_width=True)
+print(f"입력(X) 텐서 크기: {X_tensor.shape}")
+print(f"GPC(Y1) 텐서 크기: {y1_tensor.shape}")
+print(f"Thickness(Y2) 텐서 크기: {y2_tensor.shape}")
+
+# ==========================================
+# 2. 데이터셋 정의 및 분할
+# ==========================================
+dataset_gpc = TensorDataset(X_tensor, y1_tensor)
+dataset_thick = TensorDataset(X_tensor, y2_tensor)
+
+train_size = int(0.8 * len(dataset_gpc))
+test_size = len(dataset_gpc) - train_size
+
+if train_size == 0 or test_size == 0:
+    print("오류: 데이터셋이 너무 작아 train/test로 분할할 수 없습니다. (최소 2개 이상의 데이터 필요)")
+    sys.exit()
+
+train_gpc, test_gpc = random_split(dataset_gpc, [train_size, test_size])
+train_thick, test_thick = random_split(dataset_thick, [train_size, test_size])
+
+BATCH_SIZE = max(1, train_size // 4) 
+print(f"Batch Size: {BATCH_SIZE}")
+
+train_loader_gpc = DataLoader(train_gpc, batch_size=BATCH_SIZE, shuffle=True)
+test_loader_gpc = DataLoader(test_gpc, batch_size=BATCH_SIZE)
+train_loader_thick = DataLoader(train_thick, batch_size=BATCH_SIZE, shuffle=True)
+test_loader_thick = DataLoader(test_thick, batch_size=BATCH_SIZE)
+
+# ==========================================
+# 3. 모델 정의
+# ==========================================
+class GPCModel(nn.Module):
+    def __init__(self, input_dim):
+        super(GPCModel, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+    def forward(self, x):
+        return self.net(x)
+
+class ThicknessModel(nn.Module):
+    def __init__(self, input_dim):
+        super(ThicknessModel, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 128), nn.ReLU(),
+            nn.Linear(128, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+    def forward(self, x):
+        return self.net(x)
+
+# ==========================================
+# 4 & 5. 학습 및 평가 함수
+# ==========================================
+def train_model(model, train_loader, criterion, optimizer, epochs):
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0
+        for X_batch, y_batch in train_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            optimizer.zero_grad()
+            outputs = model(X_batch)
+            loss = criterion(outputs, y_batch)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        if (epoch+1) % 50 == 0 or epoch == epochs - 1:
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(train_loader):.6f}")
+
+def evaluate_model(model, test_loader, scaler_y, model_name):
+    model.eval()
+    preds, actuals = [], []
+    with torch.no_grad():
+        for X_batch, y_batch in test_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            outputs = model(X_batch)
+            preds.append(outputs.cpu().numpy())
+            actuals.append(y_batch.cpu().numpy())
             
-        st.markdown("---")
-        st.caption("결과 해석: Min-Max Scaling과 ReLU 활성화 함수가 적용되어 GPC/Step Coverage 등은 0 미만으로 예측되지 않습니다. 결과가 0에 가깝다면, 해당 조건은 증착에 비효율적임을 의미합니다.")
+    if not preds:
+        print(f"평가 중 오류: {model_name} 예측값이 없습니다.")
+        return
+        
+    preds = np.vstack(preds)
+    actuals = np.vstack(actuals)
+    
+    try:
+        preds_rescaled = scaler_y.inverse_transform(preds)
+        actuals_rescaled = scaler_y.inverse_transform(actuals)
+        mse = np.mean((preds_rescaled - actuals_rescaled)**2)
+        print(f"{model_name} Test MSE: {mse:.4f}")
+    except NotFittedError:
+        print("오류: 스케일러가 fit되지 않아 역변환할 수 없습니다.")
+    except Exception as e:
+        print(f"평가 중 오류 발생: {e}")
+
+# 하이퍼파라미터 설정
+GPC_EPOCHS = 300
+THICKNESS_EPOCHS = 300
+LEARNING_RATE = 0.001
+
+input_dim = X_tensor.shape[1]
+criterion = nn.MSELoss()
+
+# GPC 모델 학습
+model_gpc = GPCModel(input_dim).to(device)
+optimizer_gpc = torch.optim.Adam(model_gpc.parameters(), lr=LEARNING_RATE)
+print("\n===== Training GPC Model =====")
+train_model(model_gpc, train_loader_gpc, criterion, optimizer_gpc, GPC_EPOCHS)
+
+# Thickness 모델 학습
+model_thick = ThicknessModel(input_dim).to(device)
+optimizer_thick = torch.optim.Adam(model_thick.parameters(), lr=LEARNING_RATE)
+print("\n===== Training Film Thickness Model =====")
+train_model(model_thick, train_loader_thick, criterion, optimizer_thick, THICKNESS_EPOCHS)
+
+print("\n===== Evaluating Models =====")
+evaluate_model(model_gpc, test_loader_gpc, scaler_y1, "GPC")
+evaluate_model(model_thick, test_loader_thick, scaler_y2, "Film Thickness")
+
+# ==========================================
+# 6. 모델 및 스케일러 저장
+# ==========================================
+print("\n===== Saving Models and Scalers =====")
+save_dir = script_dir 
+torch.save(model_gpc.state_dict(), os.path.join(save_dir, 'ald_gpc_model.pth'))
+torch.save(model_thick.state_dict(), os.path.join(save_dir, 'ald_thick_model.pth'))
+joblib.dump(scaler_X, os.path.join(save_dir, 'scaler_X.pkl'))
+joblib.dump(scaler_y1, os.path.join(save_dir, 'scaler_y1_gpc.pkl'))
+joblib.dump(scaler_y2, os.path.join(save_dir, 'scaler_y2_thick.pkl'))
+joblib.dump(encoder, os.path.join(save_dir, 'encoder_precursor.pkl'))
+print(f"All artifacts saved to {save_dir}")
+
+# ==========================================
+# 7. 레시피 검색 최적화 함수 (전구체 고정)
+# ==========================================
+process_cols_names = df_features.columns.to_list()[:len(process_cols)]
+process_cols_count = len(process_cols_names)
+
+def objective_function(X_process_scaled, target_thickness, target_gpc, precursor_one_hot_vector):
+    X_full_scaled = np.concatenate([X_process_scaled, precursor_one_hot_vector])
+    X_tensor = torch.tensor(X_full_scaled.reshape(1, -1), dtype=torch.float32).to(device)
+    
+    model_thick.eval()
+    model_gpc.eval()
+    with torch.no_grad():
+        pred_thick_scaled = model_thick(X_tensor).cpu().numpy()
+        pred_gpc_scaled = model_gpc(X_tensor).cpu().numpy()
+
+    pred_thick = scaler_y2.inverse_transform(pred_thick_scaled)[0, 0]
+    pred_gpc = scaler_y1.inverse_transform(pred_gpc_scaled)[0, 0]
+    
+    thickness_error = (pred_thick - target_thickness)**2
+    gpc_error = (pred_gpc - target_gpc)**2
+    
+    cost = thickness_error * 1.0 + gpc_error * 1.5 
+    
+    return cost
+
+def find_best_recipe(target_thickness, target_gpc, selected_precursor_code, n_runs=10):
+    
+    selected_precursor_name = precursor_map.get(selected_precursor_code)
+    if not selected_precursor_name:
+        print(f"Error: Invalid precursor code '{selected_precursor_code}'.")
+        return
+
+    try:
+        precursor_one_hot = encoder.transform([[selected_precursor_name]])[0]
+    except NotFittedError:
+        print("Error: Encoder is not fitted. Cannot transform precursor name.")
+        return
+
+    print(f"\n--- Searching for Optimal Recipe for {selected_precursor_name} (Target: T={target_thickness:.2f}nm, G={target_gpc:.2f}Å/cycle) ---")
+    
+    bounds_scaled = [(0, 1) for _ in range(process_cols_count)]
+    
+    best_cost = float('inf')
+    best_recipe_scaled_process = None
+    
+    for run in range(n_runs):
+        initial_guess_scaled_process = np.random.rand(process_cols_count)
+        
+        optimization_result = minimize(
+            fun=lambda X_scaled_process: objective_function(X_scaled_process, target_thickness, target_gpc, precursor_one_hot),
+            x0=initial_guess_scaled_process,
+            bounds=bounds_scaled,
+            method='L-BFGS-B', 
+            options={'maxiter': 500}
+        )
+        
+        current_cost = optimization_result.fun
+        
+        if optimization_result.success and current_cost < best_cost:
+            best_cost = current_cost
+            best_recipe_scaled_process = optimization_result.x
+        
+        if n_runs <= 20:
+             print(f"Run {run+1}/{n_runs}: Cost={current_cost:.4f}, Success={optimization_result.success}")
+
+    if best_recipe_scaled_process is None:
+        print("Optimization failed to find a valid solution.")
+        return
+
+    # --- 최종 최적 레시피 해석 ---
+    best_X_scaled_full = np.concatenate([best_recipe_scaled_process, precursor_one_hot])
+    
+    try:
+        best_recipe_full = scaler_X.inverse_transform(best_X_scaled_full.reshape(1, -1))
+    except NotFittedError:
+        print("Error: Scaler_X is not fitted. Cannot inverse_transform recipe.")
+        return
+
+    pred_X_tensor = torch.tensor(best_X_scaled_full.reshape(1, -1), dtype=torch.float32).to(device)
+    with torch.no_grad():
+        try:
+            pred_thick = scaler_y2.inverse_transform(model_thick(pred_X_tensor).cpu().numpy())[0, 0]
+            pred_gpc = scaler_y1.inverse_transform(model_gpc(pred_X_tensor).cpu().numpy())[0, 0]
+        except NotFittedError:
+            print("Error: Y-Scalers are not fitted. Cannot inverse_transform predictions.")
+            return
+
+    recipe_df = pd.DataFrame(best_recipe_full[:, :process_cols_count], columns=process_cols_names)
+
+    print("\n--- Final Optimized ALD Recipe (Process Conditions) ---")
+    print(f"Selected Precursor: {selected_precursor_name}")
+    print("-" * 30)
+    print(f"Predicted Thickness: {pred_thick:.2f} nm (Target: {target_thickness:.2f} nm)")
+    print(f"Predicted GPC: {pred_gpc:.2f} Å/cycle (Target: {target_gpc:.2f} Å/cycle)")
+    print("=" * 30)
+    print("Optimized Process Conditions:")
+    for col in recipe_df.columns:
+        print(f"  - {col}: {np.round(recipe_df[col].values[0], 3)}")
+
+# ==========================================
+# 8. 사용자 입력 및 레시피 검색 실행
+# ==========================================
+print("\n" + "="*50)
+print("AI ALD Recipe Suggestion System Ready!")
+print("="*50)
+
+precursor_options = ", ".join([f"{code} ({name})" for code, name in precursor_map.items()])
+print(f"Please select the precursor code: {precursor_options}")
+
+try:
+    user_precursor_code = input("Enter Precursor Code (e.g., a): ").lower().strip()
+    if user_precursor_code not in precursor_map:
+        raise ValueError("Invalid precursor code.")
+    
+    user_target_thickness = float(input("Enter Target Film Thickness (nm): "))
+    user_target_gpc = float(input("Enter Target Growth Per Cycle (Å/cycle): "))
+except ValueError as e:
+    print(f"Invalid input: {e}")
+    sys.exit()
+except EOFError:
+    print("\nInput cancelled. Exiting.")
+    sys.exit()
+
+# 최적 레시피 검색 실행
+find_best_recipe(user_target_thickness, user_target_gpc, user_precursor_code, n_runs=100)
