@@ -6,7 +6,7 @@ import numpy as np
 import re
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, MinMaxScaler # MinMaxScaler 추가
 from sklearn.compose import ColumnTransformer
 from tensorflow.keras.models import Sequential, save_model, load_model
 from tensorflow.keras.layers import Dense, Dropout
@@ -16,11 +16,11 @@ from tensorflow.keras.callbacks import EarlyStopping
 # Keras 로드 시 경고 메시지 방지
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-# --- 0. 전역 변수 및 파일 경로 설정 ---
-# ⭐ 이 코드는 'ald_data.csv' 파일을 찾습니다. ⭐
-DATA_FILE = 'ald_data.csv'
+# --- 0. 전역 변수 및 파일 경로 설정 (파일명 일치 확인 완료) ---
+DATA_FILE = 'ald_data.csv'  # ⭐ 이 이름으로 파일이 존재해야 합니다.
 MODEL_PATH = 'improved_ald_mimo_model.h5'
 PREPROCESSOR_PATH = 'ald_preprocessor.joblib'
+Y_SCALER_PATH = 'y_minmax_scaler.joblib' # 타겟 스케일러 파일명
 
 # 입력/출력 컬럼 정의
 NUMERICAL_FEATURES = [
@@ -144,13 +144,9 @@ def train_and_save_model():
 
     df_clean = clean_data(df_raw)
     
-    X = df_clean[X_COLS_ORDER]
-    Y = df_clean[TARGET_FEATURES]
-    
-    print(f"✅ 데이터 클리닝 완료. 최종 학습 데이터셋 크기: {len(df_clean)}개")
+    X_train, X_test, Y_train, Y_test = train_test_split(df_clean[X_COLS_ORDER], df_clean[TARGET_FEATURES], test_size=0.2, random_state=42)
 
-    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-
+    # 2-1. X 입력 데이터 전처리
     numerical_transformer = StandardScaler()
     categorical_transformer = OneHotEncoder(handle_unknown='ignore')
     
@@ -161,10 +157,18 @@ def train_and_save_model():
         ]
     )
     X_train_processed = preprocessor.fit_transform(X_train)
-    
     joblib.dump(preprocessor, PREPROCESSOR_PATH)
-    print("✅ 전처리 파이프라인 (.joblib) 저장 완료.")
+    print("✅ X 입력 전처리 파이프라인 (.joblib) 저장 완료.")
 
+    # 2-2. Y 타겟 데이터 MinMax 스케일링 (정확도 및 0 이상 보장)
+    Y_scaler = MinMaxScaler()
+    Y_train_scaled = Y_scaler.fit_transform(Y_train)
+    Y_test_scaled = Y_scaler.transform(Y_test)
+    
+    joblib.dump(Y_scaler, Y_SCALER_PATH)
+    print("✅ Y 타겟 스케일러 (y_minmax_scaler.joblib) 저장 완료.")
+
+    # 2-3. 딥러닝 모델 설계
     input_dim = to_dense(X_train_processed).shape[1] 
     output_dim = Y_train.shape[1]
     
@@ -177,7 +181,7 @@ def train_and_save_model():
         Dense(64, activation='relu'),
         Dropout(0.2),
         Dense(32, activation='relu'),
-        # ⭐ [FIX] GPC 음수 오류 해결: final activation을 'relu'로 변경하여 0 이상 보장
+        # ⭐ [FIX] GPC/Uniformity 등 0 이상 보장을 위해 ReLU 사용 (MinMaxScaler와 함께 정확도 향상)
         Dense(output_dim, activation='relu') 
     ])
 
@@ -190,7 +194,7 @@ def train_and_save_model():
     print("--- AI 모델 학습 시작 (150 Epochs) ---")
     improved_model.fit(
         to_dense(X_train_processed), 
-        Y_train.values,
+        Y_train_scaled, # ⭐ 스케일링된 Y 타겟으로 학습 ⭐
         epochs=150, 
         batch_size=32,
         validation_split=0.2, 
@@ -210,7 +214,10 @@ def train_and_save_model():
 def run_single_prediction_test(model, preprocessor):
     """특정 입력에 대한 AI 모델의 예측 결과를 터미널에 출력합니다."""
     
-    # --- ⭐ 계산에 사용할 입력 조건 (이 부분을 원하는 값으로 수정하세요) ⭐ ---
+    # 3-1. Y_scaler 로드
+    Y_scaler = joblib.load(Y_SCALER_PATH)
+    
+    # --- ⭐ 계산에 사용할 입력 조건 (GPC 음수 오류를 유발했던 조건과 유사) ⭐ ---
     test_data = pd.DataFrame({
         'Precursor_Pulse_Time': [0.1], 
         'Co_reactant_Pulse_Time': [0.1], 
@@ -227,7 +234,11 @@ def run_single_prediction_test(model, preprocessor):
     
     # 전처리 및 예측
     X_test_processed = preprocessor.transform(test_data)
-    Y_predicted = model.predict(to_dense(X_test_processed))[0]
+    Y_predicted_scaled = model.predict(to_dense(X_test_processed))[0]
+    
+    # ⭐ [FIX] 예측값을 실제 단위로 역변환 ⭐
+    # Y_predicted_scaled를 2D 배열로 변환 후 역변환
+    Y_predicted_original = Y_scaler.inverse_transform(Y_predicted_scaled.reshape(1, -1))[0]
     
     # --- 결과 출력 ---
     print("\n" + "="*50)
@@ -240,8 +251,8 @@ def run_single_prediction_test(model, preprocessor):
     print("\n\n🔥 예측된 박막 특성 (Y):")
     for i, target in enumerate(TARGET_FEATURES):
         display_name = TARGET_FEATURES_DISPLAY.get(target, target)
-        # GPC가 0 이상으로 예측될 것입니다.
-        print(f"  {display_name:<25}: {Y_predicted[i]:.4f}")
+        # 역변환된 값이 출력되며, 0.0000이 아닌 현실적인 값이 나올 가능성이 높습니다.
+        print(f"  {display_name:<25}: {Y_predicted_original[i]:.4f}")
     print("="*50)
 
 # --- 4. 메인 실행 블록 ---
@@ -250,7 +261,6 @@ def load_ai_assets():
     """저장된 AI 모델과 전처리기를 로드"""
     global loaded_model, loaded_preprocessor
     try:
-        # Keras 호환성 확보를 위해 custom_objects 없이 로드
         loaded_model = load_model(MODEL_PATH) 
         loaded_preprocessor = joblib.load(PREPROCESSOR_PATH)
         return loaded_model, loaded_preprocessor
