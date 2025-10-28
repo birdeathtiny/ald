@@ -1,0 +1,186 @@
+¼ø¼­,Precursor,Co-reactant,Precursor_Pulse Time (s),Co-reactant_Pulse Time (s),Cycles (n),Temperature (¡ÆC),Pressure (torr),Purge Gas,Purge Time (s),Purge Gas Flow Rate (cm3/min),Precursor Flow Rate,Co-reactant Flow Rate,Thickness (nm),"Surface Roughness (RMS, nm)",Uniformity (%),"Step Coverage (sc, %)",Density (g?cm?3),GPC (A¢ª?cycle?1),,Aspect Ratio (AR),Leakage Current Density (A?cm?2),Dielectric Constant (¥å),Breakdown Field (MV?cm?1),Paper Title
+1,TMA,H©üO,0.1,0.1,500,300,0.3,N2,5,200,,,50,,¡¾2.00,90%,3,1.1,,100,,,,Saturation profile based conformality analysis for atomic layer deposition: Aluminum oxide in lateral high-aspect-ratio channels
+1,TMA,H©üO,0.1,0.1,500,300,0.3,N2,5,200,,,50,,¡¾2.00,60,3,1.1,,200,,,,Saturation profile based conformality analysis for atomic layer deposition: Aluminum oxide in lateral high-aspect-ratio channels
+2,SiH©þ,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,80,2.2,1,,5,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TiCl©þ,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,75,3.7,0.5,,10.5,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TMA,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,85,3,1.1,,16,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TEMAH,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,70,9.6,1,,21.5,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,SiH©þ,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,80,2.2,1,,27,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TiCl©þ,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,75,3.7,0.5,,32.5,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TMA,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,85,3,1.1,,38,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TEMAH,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,70,9.6,1,,43.5,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,SiH©þ,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,80,2.2,1,,49,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TiCl©þ,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,75,3.7,0.5,,54.5,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+2,TMA,O2,0.1,2,100,200,0.08,Ar,5,200,,,10,,¡¾3.00,85,3,1.1,,60,,,,"Film Conformality and Extracted Recombination Probabilities of O Atoms during Plasma-Assisted ALD of SiO©ü, TiO©ü, Al©üO©ý, and HfO©ü"
+3,TMA,H©üO,0.1,0.1,500,300,0.35,N2,10,150,,,50,0.4,¡¾1.50,AR = 1000 ¡æ SC ? 99 %,3,1.1,,10,,,,Tunable Atomic Layer Deposition into Ultra-High-Aspect-Ratio (> 10 000 : 1) Structures
+3,TMA,H©üO,0.1,0.1,500,300,0.35,N2,10,150,,,50,0.4,¡¾1.50,AR = 10 000 ¡æ SC ? 95 %,3,1.1,,10,,,,Tunable Atomic Layer Deposition into Ultra-High-Aspect-Ratio (> 10 000 : 1) Structures
+4,TMA,H©üO,0.1,0.1,500,300,0.3,N2,5,200,,,50,,,60 ? 95 % (AR = 100?2000 depending on sticking coefficient),3,1.1,,20,,,,Conformality of Atomic Layer Deposition in Microchannels: Impact of Process Parameters on the Simulated Thickness Profile
+5,SiH©þ,O©ü,Continuous flow,Continuous flow,,200,,,,,,,100,0.4,¡¾1.30,¡Ã95%,2.2,,,2,,,,Excellent conformality of atmospheric-pressure plasma-enhanced spatial atomic layer deposition with subsecond plasma exposure times
+6,LiO$^t$Bu,H©üO,0.5,0.1,1000,250,0.4,N2,5,150,,,100,0.6,¡¾2.00,90,2.6,1,,40,1.00E-07,8.5,5.6,Conformal High-Aspect-Ratio Solid Electrolyte Thin Films for All-Solid-State Batteries by Atomic Layer Deposition
+6,TMA,H©üO,0.1,0.1,1000,250,0.4,N2,5,150,,,100,0.6,¡¾2.00,90,2.6,1,,40,1.00E-07,8.5,5.6,Conformal High-Aspect-Ratio Solid Electrolyte Thin Films for All-Solid-State Batteries by Atomic Layer Deposition
+6,H©ýPO©þ,H©üO,0.2,0.1,1000,250,0.4,N2,5,150,,,100,0.6,¡¾2.00,90,2.6,1,,40,1.00E-07,8.5,5.6,Conformal High-Aspect-Ratio Solid Electrolyte Thin Films for All-Solid-State Batteries by Atomic Layer Deposition
+7,TMA,H©üO,0.1,0.1,500,300,0.3,N2,5,200,50,100,50,,¡¾2.00,55 ? 95 %,3,1.1,,40,,,,Multiscale CFD modelling for conformal atomic layer deposition of high aspect ratio nanostructures
+8,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,50,100,50,,¡¾2.00,55 ? 95 %,3,1.1,,40,,,,Modeling the impact of incomplete conformality during atomic layer deposition in high aspect ratio structures
+9,SiH©þ,O©ü,0.1,2,100,200,0.4,Ar,5,200,,,10,,¡¾4.00,SiO©ü ? 85 %,2.2,1,,5,,,,Conformality of remote plasma-enhanced atomic layer deposition processes: An experimental study
+9,TiCl©þ,O©ü,0.1,2,100,200,0.4,Ar,5,200,,,10,,¡¾4.00,TiO©ü ? 80 %,3.7,0.5,,6,,,,Conformality of remote plasma-enhanced atomic layer deposition processes: An experimental study
+9,TMA,O©ü,0.1,2,100,200,0.4,Ar,5,200,,,10,,¡¾4.00,Al©üO©ý ? 90 %,3,1.1,,7,,,,Conformality of remote plasma-enhanced atomic layer deposition processes: An experimental study
+9,TEMAH,O©ü,0.1,2,100,200,0.4,Ar,5,200,,,10,,¡¾4.00,HfO©ü ? 76 %,9.6,1.1,,6,,,,Conformality of remote plasma-enhanced atomic layer deposition processes: An experimental study
+10,TMA,H©üO,,,,150,0.75,N2,,100,20,40,50,0.5,¡¾1.20,90 - 95 %,3,1,,5,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)"
+10,TMA,H©üO,,,,185,1.5,N2,,178,20,40,50,0.5,¡¾1.20,90 - 95 %,1.05,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,220,2.25,N2,,256,20,40,50,0.5,¡¾1.20,90 - 95 %,1.1,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,255,3,N2,,333,20,40,50,0.5,¡¾1.20,90 - 95 %,1.15,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,290,3.75,N2,,411,20,40,50,0.5,¡¾1.20,90 - 95 %,1.2,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,300,4.5,N2,,489,20,40,50,0.5,¡¾1.20,90 - 95 %,1,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,150,5.25,Ar,,567,20,40,50,0.5,¡¾1.20,90 - 95 %,1.05,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,185,6,Ar,,600,20,40,50,0.5,¡¾1.20,90 - 95 %,1.1,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,220,6.75,Ar,,100,20,40,50,0.5,¡¾1.20,90 - 95 %,1.15,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,255,7.5,Ar,,178,20,40,50,0.5,¡¾1.20,90 - 95 %,1.2,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Disposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,290,8.25,Ar,,256,20,40,50,0.5,¡¾1.20,90 - 95 %,1,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+10,TMA,H©üO,,,,300,9,Ar,,333,20,40,50,0.5,¡¾1.20,90 - 95 %,1.05,,,,,,"Can We Rationally Design and Operate Spatial Atomic Layer Deposition for Conformal Al2O3 (Vale et al., 2023)",
+11,TMA,H©üO,0.1,0.1,500,200,0.5,N2,5,150,,,50,1.2,¡¾2.00,92%,3,1,,30,2.00E-07,8.7,5.5,"Conformal and Transparent Al2O3 Passivation Coating via ALD for High Aspect Ratio Ag Network Electrodes (Lee et al., 2023)"
+12,TDMAS,NH©ý,0.1,0.1,500,300,0.4,N2,5,200,20,50,50,0.7,¡¾2.00,90%,2.9,1,,30,5.00E-07,7.2,6,Enhancement of Conformality of Silicon Nitride Thin Films via Thermal Atomic Layer Deposition (2023)
+13,DEZ (Diethylzinc),H©üS,0.5,0.5,300,150,1,N2,1,200,,30,,,,80-95%,4.1,1,,100 - 300,,,,"Atomic Layer Depositon of Nanotubes: A High-Aspect-Ratio Study (Farhangfar et al., 2009)"
+14,TMA,O3,0.1,0.1,,200,0.3,N2,,,,,,,,60-95%,3,,,,,,,A Model for Al2O3 ALD Congormity and Deposotion Rate from TMA/ozone in High-Aspect-Ratio Trencheds by Prechtl & Kersch
+14,TMA,O3,0.1,0.1,,233,0.49,N2,,,,,,,,60-95%,3,,,,,,,A Model for Al2O3 ALD Congormity and Deposotion Rate from TMA/ozone in High-Aspect-Ratio Trencheds by Prechtl & Kersch
+14,TMA,O3,0.1,0.1,,267,0.67,N2,,,,,,,,60-95%,3,,,,,,,A Model for Al2O3 ALD Congormity and Deposotion Rate from TMA/ozone in High-Aspect-Ratio Trencheds by Prechtl & Kersch
+14,TMA,O3,0.1,0.1,,300,0.86,N2,,,,,,,,60-95%,3,,,,,,,A Model for Al2O3 ALD Congormity and Deposotion Rate from TMA/ozone in High-Aspect-Ratio Trencheds by Prechtl & Kersch
+14,TMA,O3,0.1,0.1,,200,1,N2,,,,,,,,60-95%,3,,,,,,,A Model for Al2O3 ALD Congormity and Deposotion Rate from TMA/ozone in High-Aspect-Ratio Trencheds by Prechtl & Kersch
+15,TMA,H©üO,0.1,0.1,500,200,0.4,N2,5,150,,,,0.4,¡¾2.00,,3,1,,,1.00E-07,8.2,5.4,"Protective Coatings for Front Surface Silver Mirrors by Atomic Layer Deposition bt Bulkin et al., 2019"
+16,TMA,H©üO,0.05,0.05,100,150,0.1,N2,0.1,100,,,10,0.3,¡¾1.00,70-99%,2.5,0.5,,7,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.07,0.08,200,183,0.2,N2,1.2,122,,,20,0.43,¡¾1.44,70-99%,3.44,0.63,,9.78,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.09,0.11,300,217,0.3,N2,2.3,144,,,30,0.56,¡¾1.89,70-99%,4.38,0.76,,12.56,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.11,0.13,400,250,0.4,N2,3.4,167,,,40,0.7,¡¾2.33,70-99%,5.31,0.89,,15.33,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.13,0.15,500,283,0.5,N2,4.5,189,,,50,0.83,¡¾2.78,70-99%,6.25,1.01,,18.11,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.15,0.17,600,317,0.6,N2,5.6,211,,,60,0.96,¡¾2.33,70-99%,7.19,1.14,,20.89,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.17,0.18,700,350,0.7,N2,6.7,233,,,70,1.09,¡¾1.89,70-99%,8.13,0.5,,23.67,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.18,0.2,800,150,0.8,N2,7.8,256,,,80,1.22,¡¾1.44,70-99%,9.06,0.63,,7,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.2,0.2,900,183,0.9,N2,8.9,278,,,90,1.35,¡¾1.00,70-99%,2.5,0.76,,9.78,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TMA,H©üO,0.05,0.05,1000,217,1,N2,10,300,,,100,1.5,¡¾1.00,70-99%,3.44,0.89,,12.56,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.05,0.05,100,150,0.1,Ar,0.1,100,,,10,0.3,¡¾1.00,70-99%,4.38,1.01,,15.33,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.07,0.08,200,183,0.2,Ar,1.2,122,,,20,0.43,¡¾1.44,70-99%,5.31,1.14,,18.11,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.09,0.11,300,217,0.3,Ar,2.3,144,,,30,0.56,¡¾1.89,70-99%,6.25,0.5,,20.89,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.11,0.13,400,250,0.4,Ar,3.4,167,,,40,0.7,¡¾2.33,70-99%,7.19,0.63,,23.67,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.13,0.15,500,283,0.5,Ar,4.5,189,,,50,0.83,¡¾2.78,70-99%,8.13,0.76,,7,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.15,0.17,600,317,0.6,Ar,5.6,211,,,60,0.96,¡¾2.33,70-99%,9.06,0.89,,9.78,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.17,0.18,700,350,0.7,Ar,6.7,233,,,70,1.09,¡¾1.89,70-99%,2.5,1.01,,12.56,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.18,0.2,800,150,0.8,Ar,7.8,256,,,80,1.22,¡¾1.44,70-99%,3.44,1.14,,15.33,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.2,0.2,900,183,0.9,Ar,8.9,278,,,90,1.35,¡¾1.00,70-99%,4.38,0.5,,18.11,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TiCl©þ,H©üO,0.05,0.05,1000,217,1,Ar,10,300,,,100,1.5,¡¾1.00,70-99%,5.31,0.63,,20.89,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.05,0.05,100,150,0.1,N2,0.1,100,,,10,0.3,¡¾1.00,70-99%,6.25,0.76,,23.67,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.07,0.08,200,183,0.2,N2,1.2,122,,,20,0.43,¡¾1.44,70-99%,7.19,0.89,,7,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.09,0.11,300,217,0.3,N2,2.3,144,,,30,0.56,¡¾1.89,70-99%,8.13,1.01,,9.78,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.11,0.13,400,250,0.4,N2,3.4,167,,,40,0.7,¡¾2.33,70-99%,9.06,1.14,,12.56,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.13,0.15,500,283,0.5,N2,4.5,189,,,50,0.83,¡¾2.78,70-99%,2.5,0.5,,15.33,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.15,0.17,600,317,0.6,N2,5.6,211,,,60,0.96,¡¾2.33,70-99%,3.44,0.63,,18.11,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.17,0.18,700,350,0.7,N2,6.7,233,,,70,1.09,¡¾1.89,70-99%,4.38,0.76,,20.89,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.18,0.2,800,150,0.8,N2,7.8,256,,,80,1.22,¡¾1.44,70-99%,5.31,0.89,,23.67,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.2,0.2,900,183,0.9,N2,8.9,278,,,90,1.35,¡¾1.00,70-99%,6.25,1.01,,7,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,HfCl©þ,O©ý,0.05,0.05,1000,217,1,N2,10,300,,,100,1.5,¡¾1.00,70-99%,7.19,1.14,,9.78,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.05,0.05,100,150,0.1,Ar,0.1,100,,,10,0.3,¡¾1.00,70-99%,8.13,0.5,,12.56,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.07,0.08,200,183,0.2,Ar,1.2,122,,,20,0.43,¡¾1.44,70-99%,9.06,0.63,,15.33,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.09,0.11,300,217,0.3,Ar,2.3,144,,,30,0.56,¡¾1.89,70-99%,2.5,0.76,,18.11,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.11,0.13,400,250,0.4,Ar,3.4,167,,,40,0.7,¡¾2.33,70-99%,3.44,0.89,,20.89,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.13,0.15,500,283,0.5,Ar,4.5,189,,,50,0.83,¡¾2.78,70-99%,4.38,1.01,,23.67,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.15,0.17,600,317,0.6,Ar,5.6,211,,,60,0.96,¡¾2.33,70-99%,5.31,1.14,,7,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.17,0.18,700,350,0.7,Ar,6.7,233,,,70,1.09,¡¾1.89,70-99%,6.25,0.5,,9.78,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.18,0.2,800,150,0.8,Ar,7.8,256,,,80,1.22,¡¾1.44,70-99%,7.19,0.63,,12.56,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.2,0.2,900,183,0.9,Ar,8.9,278,,,90,1.35,¡¾1.00,70-99%,8.13,0.76,,15.33,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+16,TDMAS,NH©ý,0.05,0.05,1000,217,1,Ar,10,300,,,100,1.5,¡¾1.00,70-99%,9.06,0.89,,18.11,,,,"Novel Atomic Layer Processes for Semiconductor 3D Structures by S.Lee et al., 2025"
+17,TDMA-Ti,O©ü,0.1,0.2,400,250,0.5,N2,5,150,,,40,0.8,¡¾2.00,85-95%,3.8,1,,3,,,,"Enhanced Step Coverage of TiO©ü Deposited on High Aspect Ratio Structures (P. Schindler et al., Langmuir, 2015)"
+18,TMA,H©üO,0.1,0.2,300 - 500,250,0.5,N2,5,200,,,25,,¡¾3.00,Al©üO©ý ? 90 %,,1,,3,,,,"Pt?Al©üO©ý dual layer atomic layer deposition coating in high aspect ratio nanoporous membranes (G. Pardon et al., 2013)"
+18,MeCpPtMe©ý,O©ü,0.1,0.2,300 - 500,250,0.5,N2,5,200,,,5,,¡¾3.00,Pt ? 75 %,,0.4,,3,,,,"Pt?Al©üO©ý dual layer atomic layer deposition coating in high aspect ratio nanoporous membranes (G. Pardon et al., 2013)"
+19,TMA,O©ü,0.1,0.2,500,300,0.2,Ar,3,100,,,50,,¡¾3.00,Al©üO©ý = 95 % (AR = 5),3,1,,4.25,,,,Conformality of Al©üO©ý and AlN Deposited by Plasma?Enhanced Atomic Layer Deposition
+19,TMA,O©ü,0.1,0.2,500,300,0.2,Ar,3,100,,,50,,¡¾3.00,Al©üO©ý = 80 % (AR = 22),3,1,,4.25,,,,Conformality of Al©üO©ý and AlN Deposited by Plasma?Enhanced Atomic Layer Deposition
+19,TMA,N©ü/H©ü,0.1,0.2,500,300,0.2,Ar,3,100,,,45,,¡¾3.00,AlN = 90 % (AR = 5),3.2,0.9,,4.25,,,,Conformality of Al©üO©ý and AlN Deposited by Plasma?Enhanced Atomic Layer Deposition
+19,TMA,N©ü/H©ü,0.1,0.2,500,300,0.2,Ar,3,100,,,45,,¡¾3.00,AlN = 70 % (AR = 22),3.2,0.9,,4.25,,,,Conformality of Al©üO©ý and AlN Deposited by Plasma?Enhanced Atomic Layer Deposition
+20,TMA,H©üO,0.1,0.1,500,300,0.5,N2,5,200,,,30 - 50,,¡¾2.00,98 % (AR = 10),3,1,,,,,,"Tunable Atomic Layer Deposition into Ultra?High?Aspect?Ratio (>60?000:1) Structures (A. J. Gayle et al., 2021)"
+20,TMA,H©üO,0.1,0.1,500,300,0.5,N2,5,200,,,30 - 50,,¡¾2.00,90 % (AR = 1 000),3,1,,,,,,"Tunable Atomic Layer Deposition into Ultra?High?Aspect?Ratio (>60?000:1) Structures (A. J. Gayle et al., 2021)"
+20,TMA,H©üO,0.1,0.1,500,300,0.5,N2,5,200,,,30 - 50,,¡¾2.00,60 % (AR = 60 000),3,1,,,,,,"Tunable Atomic Layer Deposition into Ultra?High?Aspect?Ratio (>60?000:1) Structures (A. J. Gayle et al., 2021)"
+21,TMA,H©üO,0.1,0.1,500,200,0.4,N2,5,200,,,50,,¡¾2.00,Al©üO©ý ? 95 % (AR 200),3,1.1,,50,,,,"Microscopic silicon?based lateral high?aspect?ratio (LHAR) test structures for ALD conformality analysis (J. V?is?nen et al., J. Vac. Sci. Technol. A , 2014)"
+21,TiCl©þ,H©üO,0.1,0.1,500,200,0.4,N2,5,200,,,50,,¡¾2.00,TiO©ü ? 85 % (AR 200),3.8,0.9,,50,,,,"Microscopic silicon?based lateral high?aspect?ratio (LHAR) test structures for ALD conformality analysis (J. V?is?nen et al., J. Vac. Sci. Technol. A , 2014)"
+21,DEZ,H©üO,0.1,0.1,500,200,0.4,N2,5,200,,,50,,¡¾2.00,ZnO ? 75 % (AR 200),5.6,1.6,,50,,,,"Microscopic silicon?based lateral high?aspect?ratio (LHAR) test structures for ALD conformality analysis (J. V?is?nen et al., J. Vac. Sci. Technol. A , 2014)"
+22,TMA,H©üO,,,500,200,0.1,N2,,,,,30 - 50,,¡¾3.00,95 % (AR = 10),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,225,0.2,N2,,,,,30 - 50,,¡¾3.00,70 % (AR = 200),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,250,0.3,N2,,,,,30 - 50,,¡¾3.00,55 % (AR = 500),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,275,0.4,N2,,,,,30 - 50,,¡¾3.00,95 % (AR = 10),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,300,0.5,N2,,,,,30 - 50,,¡¾3.00,70 % (AR = 200),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,200,0.6,N2,,,,,30 - 50,,¡¾3.00,55 % (AR = 500),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,225,0.7,N2,,,,,30 - 50,,¡¾3.00,95 % (AR = 10),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,250,0.8,N2,,,,,30 - 50,,¡¾3.00,70 % (AR = 200),3,1,,,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,275,0.9,N2,,,,,30 - 50,,¡¾3.00,55 % (AR = 500),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+22,TMA,H©üO,,,500,300,1,N2,,,,,30 - 50,,¡¾3.00,95 % (AR = 10),3,1,,5,,,,Modeling incomplete conformality during atomic layer deposition in high aspect ratio structures (2023)
+23,TMA,H©üO,0.05,0.05,100,100,0.08,N2,0.1,100,10,10,100,0.3,¡¾1.00,50 ? 100 (%),2.5,0.5,,10,7,5,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.07,0.08,200,139,0.28,N2,1.2,122,14,14,133,0.43,¡¾1.44,50 ? 100 (%),3.28,0.61,,11,9,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.09,0.11,300,178,0.47,N2,2.3,144,18,18,167,0.56,¡¾1.89,50 ? 100 (%),4.06,0.72,,12,11,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.11,0.13,400,217,0.66,N2,3.4,167,22,22,200,0.7,¡¾2.33,50 ? 100 (%),4.83,0.83,,13,13,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.13,0.15,500,256,0.86,N2,4.5,189,26,26,233,0.83,¡¾2.78,50 ? 100 (%),5.61,0.94,,14,15,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.15,0.17,600,294,1.05,N2,5.6,211,30,30,267,0.96,¡¾2.33,50 ? 100 (%),6.39,1.06,,15,17,5,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.17,0.18,700,333,1.24,N2,6.7,233,34,34,300,1.09,¡¾1.89,50 ? 100 (%),7.17,1.17,,16,19,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.18,0.2,800,350,1.43,N2,7.8,256,38,38,100,1.22,¡¾1.44,50 ? 100 (%),7.94,1.28,,17,21,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.2,0.2,900,100,1.62,N2,8.9,278,42,42,133,1.35,¡¾1.00,50 ? 100 (%),8.72,1.39,,18,23,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TMA,H©üO,0.05,0.05,1000,139,1.81,N2,10,300,46,46,167,1.5,¡¾1.00,50 ? 100 (%),2.5,1.5,,19,25,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.05,0.05,100,178,0.08,Ar,0.1,100,10,10,200,0.3,¡¾1.00,50 ? 100 (%),3.28,0.5,,20,7,5,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.07,0.08,200,217,0.28,Ar,1.2,122,14,14,233,0.43,¡¾1.44,50 ? 100 (%),4.06,0.61,,21,9,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.09,0.11,300,256,0.47,Ar,2.3,144,18,18,267,0.56,¡¾1.89,50 ? 100 (%),4.83,0.72,,22,11,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.11,0.13,400,294,0.66,Ar,3.4,167,22,22,300,0.7,¡¾2.33,50 ? 100 (%),5.61,0.83,,23,13,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.13,0.15,500,333,0.86,Ar,4.5,189,26,26,100,0.83,¡¾2.78,50 ? 100 (%),6.39,0.94,,24,15,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.15,0.17,600,350,1.05,Ar,5.6,211,30,30,133,0.96,¡¾2.33,50 ? 100 (%),7.17,1.06,,25,17,5,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.17,0.18,700,100,1.24,Ar,6.7,233,34,34,167,1.09,¡¾1.89,50 ? 100 (%),7.94,1.17,,10,19,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.18,0.2,800,139,1.43,Ar,7.8,256,38,38,200,1.22,¡¾1.44,50 ? 100 (%),8.72,1.28,,11,21,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.2,0.2,900,178,1.62,Ar,8.9,278,42,42,233,1.35,¡¾1.00,50 ? 100 (%),2.5,1.39,,12,23,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TiCl©þ,O©ý,0.05,0.05,1000,217,1.81,Ar,10,300,46,46,267,1.5,¡¾1.00,50 ? 100 (%),3.28,1.5,,13,25,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.05,0.05,100,256,0.08,N2,0.1,100,10,10,300,0.3,¡¾1.00,50 ? 100 (%),4.06,0.5,,14,7,5,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.07,0.08,200,294,0.28,N2,1.2,122,14,14,100,0.43,¡¾1.44,50 ? 100 (%),4.83,0.61,,15,9,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.09,0.11,300,333,0.47,N2,2.3,144,18,18,133,0.56,¡¾1.89,50 ? 100 (%),5.61,0.72,,16,11,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.11,0.13,400,350,0.66,N2,3.4,167,22,22,167,0.7,¡¾2.33,50 ? 100 (%),6.39,0.83,,17,13,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.13,0.15,500,100,0.86,N2,4.5,189,26,26,200,0.83,¡¾2.78,50 ? 100 (%),7.17,0.94,,18,15,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.15,0.17,600,139,1.05,N2,5.6,211,30,30,233,0.96,¡¾2.33,50 ? 100 (%),7.94,1.06,,19,17,5,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.17,0.18,700,178,1.24,N2,6.7,233,34,34,267,1.09,¡¾1.89,50 ? 100 (%),8.72,1.17,,20,19,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.18,0.2,800,217,1.43,N2,7.8,256,38,38,300,1.22,¡¾1.44,50 ? 100 (%),2.5,1.28,,21,21,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.2,0.2,900,256,1.62,N2,8.9,278,42,42,100,1.35,¡¾1.00,50 ? 100 (%),3.28,1.39,,22,23,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,DEZ,NH©ý,0.05,0.05,1000,294,1.81,N2,10,300,46,46,133,1.5,¡¾1.00,50 ? 100 (%),4.06,1.5,,23,25,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.05,0.05,100,333,0.08,Ar,0.1,100,10,10,167,0.3,¡¾1.00,50 ? 100 (%),4.83,0.5,,24,7,5,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.07,0.08,200,350,0.28,Ar,1.2,122,14,14,200,0.43,¡¾1.44,50 ? 100 (%),5.61,0.61,,25,9,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.09,0.11,300,100,0.47,Ar,2.3,144,18,18,233,0.56,¡¾1.89,50 ? 100 (%),6.39,0.72,,10,11,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.11,0.13,400,139,0.66,Ar,3.4,167,22,22,267,0.7,¡¾2.33,50 ? 100 (%),7.17,0.83,,11,13,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.13,0.15,500,178,0.86,Ar,4.5,189,26,26,300,0.83,¡¾2.78,50 ? 100 (%),7.94,0.94,,12,15,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.15,0.17,600,217,1.05,Ar,5.6,211,30,30,100,0.96,¡¾2.33,50 ? 100 (%),8.72,1.06,,13,17,5,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.17,0.18,700,256,1.24,Ar,6.7,233,34,34,133,1.09,¡¾1.89,50 ? 100 (%),2.5,1.17,,14,19,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.18,0.2,800,294,1.43,Ar,7.8,256,38,38,167,1.22,¡¾1.44,50 ? 100 (%),3.28,1.28,,15,21,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.2,0.2,900,333,1.62,Ar,8.9,278,42,42,200,1.35,¡¾1.00,50 ? 100 (%),4.06,1.39,,16,23,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TEMAH,O©ý,0.05,0.05,1000,350,1.81,Ar,10,300,46,46,233,1.5,¡¾1.00,50 ? 100 (%),4.83,1.5,,17,25,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.05,0.05,100,100,2,N2,0.1,100,10,10,267,0.3,¡¾1.00,50 ? 100 (%),5.61,0.5,,18,7,5,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.07,0.08,200,139,0.08,N2,1.2,122,14,14,300,0.43,¡¾1.44,50 ? 100 (%),6.39,0.61,,19,9,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.09,0.11,300,178,0.28,N2,2.3,144,18,18,100,0.56,¡¾1.89,50 ? 100 (%),7.17,0.72,,20,11,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.11,0.13,400,217,0.47,N2,3.4,167,22,22,133,0.7,¡¾2.33,50 ? 100 (%),7.94,0.83,,21,13,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.13,0.15,500,256,0.66,N2,4.5,189,26,26,167,0.83,¡¾2.78,50 ? 100 (%),8.72,0.94,,22,15,9.89,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.15,0.17,600,294,0.86,N2,5.6,211,30,30,200,0.96,¡¾2.33,50 ? 100 (%),2.5,1.06,,23,17,5,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.17,0.18,700,333,1.05,N2,6.7,233,34,34,233,1.09,¡¾1.89,50 ? 100 (%),3.28,1.17,,24,19,6.22,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.18,0.2,800,350,1.24,N2,7.8,256,38,38,267,1.22,¡¾1.44,50 ? 100 (%),4.06,1.28,,25,21,7.44,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.2,0.2,900,100,1.43,N2,8.9,278,42,42,300,1.35,¡¾1.00,50 ? 100 (%),4.83,1.39,,10,23,8.67,Conformality in atomic layer deposition: Current status (2019),
+23,TDMAS,NH©ý,0.05,0.05,1000,139,1.62,N2,10,300,46,46,100,1.5,¡¾1.00,50 ? 100 (%),5.61,1.5,,11,25,9.89,Conformality in atomic layer deposition: Current status (2019),
+24,TMA,EG (=Ethylene glycol),0.1,0.2,500,120,0.6,N2,5,200,,,50,,¡¾3.00,90 % (AR = 10),1.7,2.5,,10,,,,Molecular layer deposition of alucone in high aspect ratio trenches: The effect of the CVD component on the step coverage (2023)
+24,TMA,EG (=Ethylene glycol),0.1,0.2,500,120,0.6,N2,5,200,,,50,,¡¾3.00,75 % (AR = 100),1.7,2.5,,10,,,,Molecular layer deposition of alucone in high aspect ratio trenches: The effect of the CVD component on the step coverage (2023)
+24,TMA,EG (=Ethylene glycol),0.1,0.2,500,120,0.6,N2,5,200,,,50,,¡¾3.00,60 % (AR = 1000),1.7,2.5,,10,,,,Molecular layer deposition of alucone in high aspect ratio trenches: The effect of the CVD component on the step coverage (2023)
+25,TEMAHf,O©ü,0.1,0.2,400,250,0.6,Ar,5,100,,,40,0.5,¡¾2.00,93 % (AR = 10),9.5,0.9,,10,1.00E-07,19.6,7.2,Deposition of HfO©ü by Remote Plasma ALD for High?Aspect?Ratio Trench Structures (2025)
+25,TEMAHf,O©ü,0.1,0.2,400,250,0.6,Ar,5,100,,,40,0.5,¡¾2.00,85 % (AR = 50),9.5,0.9,,10,1.00E-07,19.6,7.2,Deposition of HfO©ü by Remote Plasma ALD for High?Aspect?Ratio Trench Structures (2025)
+25,TEMAHf,O©ü,0.1,0.2,400,250,0.6,Ar,5,100,,,40,0.5,¡¾2.00,78 % (AR = 100),9.5,0.9,,10,1.00E-07,19.6,7.2,Deposition of HfO©ü by Remote Plasma ALD for High?Aspect?Ratio Trench Structures (2025)
+26,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,,,50,,¡¾2.00,95 % (AR 10),3,1.1,,50,,,,Competitive co?diffusion as a route to enhanced step coverage (2024)
+26,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,,,50,,¡¾2.00,85 % (AR 100),3,1.1,,50,,,,Competitive co?diffusion as a route to enhanced step coverage (2024)
+26,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,,,50,,¡¾2.00,70 % (AR 1000),3,1.1,,50,,,,Competitive co?diffusion as a route to enhanced step coverage (2024)
+26,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,,,50,,¡¾2.00,60 % (AR 5000),3,1.1,,50,,,,Competitive co?diffusion as a route to enhanced step coverage (2024)
+27,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,,,50,,¡¾2.00,100 % (AR = 10),3,1.1,,10,,,,Saturation profile based conformality analysis for atomic layer deposition: aluminum oxide in lateral high-aspect-ratio channels
+27,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,,,50,,¡¾2.00,90 % (AR = 100),3,1.1,,10,,,,Saturation profile based conformality analysis for atomic layer deposition: aluminum oxide in lateral high-aspect-ratio channels
+27,TMA,H©üO,0.1,0.1,500,300,0.4,N2,5,200,,,50,,¡¾2.00,70 % (AR = 1000),3,1.1,,10,,,,Saturation profile based conformality analysis for atomic layer deposition: aluminum oxide in lateral high-aspect-ratio channels
+28,TMA,H©üO,0.1,0.1,500,300,0.5,N2+Ar,5,150,,,45,0.6,¡¾3.00,95 % (AR 10),3,1,,50,,,,Using a Heavy Inert Diffusion Additive for Superconformal Atomic Layer Deposition
+28,TMA,H©üO,0.1,0.1,500,300,0.5,N2+Ar,5,150,,,45,0.6,¡¾3.00,90 % (AR 100),3,1,,50,,,,Using a Heavy Inert Diffusion Additive for Superconformal Atomic Layer Deposition
+28,TMA,H©üO,0.1,0.1,500,300,0.5,N2+Ar,5,150,,,45,0.6,¡¾3.00,80 % (AR 500),3,1,,50,,,,Using a Heavy Inert Diffusion Additive for Superconformal Atomic Layer Deposition
+29,TMA,H©üO,0.1,0.1,500,300,0.5,N2,5,150,,,40,,¡¾2.00,95 % (AR 10),3,1,,50,,,,Multiscale CFD modelling for conformal atomic layer deposition (2023)
+29,TMA,H©üO,0.1,0.1,500,300,0.5,N2,5,150,,,40,,¡¾2.00,85 % (AR 100),3,1,,10,,,,Multiscale CFD modelling for conformal atomic layer deposition (2023)
+29,TMA,H©üO,0.1,0.1,500,300,0.5,N2,5,150,,,40,,¡¾2.00,70 % (AR 1000),3,1,,100,,,,Multiscale CFD modelling for conformal atomic layer deposition (2023)
+30,LiOtBu,O©ü + N2,0.2,0.3,800,250,0.8,Ar,5,150,,,80,0.9,¡¾3.00,93 % (AR 20),2.5,1,,50,2.00E-07,12.1,6.8,Conformal High?Aspect?Ratio Solid Electrolyte Thin Films for All?Solid?State Batteries (2024)
+30,TEPO,O©ü + N2,0.2,0.3,800,250,0.8,Ar,5,150,,,80,0.9,¡¾3.00,86 % (AR 50),2.5,1,,5,2.00E-07,12.1,6.8,Conformal High?Aspect?Ratio Solid Electrolyte Thin Films for All?Solid?State Batteries (2024)
+30,NH©ý,O©ü + N2,0.2,0.3,800,250,0.8,Ar,5,150,,,80,0.9,¡¾3.00,78 % (AR 100),2.5,1,,5,2.00E-07,12.1,6.8,Conformal High?Aspect?Ratio Solid Electrolyte Thin Films for All?Solid?State Batteries (2024)
+31,TDMAS,N©ü / NH©ý,0.1,0.2,600,350,0.7,Ar,5,100,,,60,0.6,¡¾2.00,94 % (AR 10),2.9,1,,10,3.00E-07,6.7,7,Enhancement of Conformality of Silicon Nitride Thin Films by ALD (2023)
+31,TDMAS,N©ü / NH©ý,0.1,0.2,600,350,0.7,Ar,5,100,,,60,0.6,¡¾2.00,88 % (AR 50),2.9,1,,10,3.00E-07,6.7,7,Enhancement of Conformality of Silicon Nitride Thin Films by ALD (2023)
+31,TDMAS,N©ü / NH©ý,0.1,0.2,600,350,0.7,Ar,5,100,,,60,0.6,¡¾2.00,80 % (AR 100),2.9,1,,10,3.00E-07,6.7,7,Enhancement of Conformality of Silicon Nitride Thin Films by ALD (2023)
