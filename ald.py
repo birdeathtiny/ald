@@ -16,8 +16,9 @@ from tensorflow.keras.callbacks import EarlyStopping
 # Keras 로드 시 경고 메시지 방지
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-# --- 0. 전역 변수 및 파일 경로 설정 (파일명 일치 확인 완료) ---
-DATA_FILE = 'ald_data.csv'  # ⭐ 이 이름으로 파일이 존재해야 합니다.
+# --- 0. 전역 변수 및 파일 경로 설정 ---
+# ⭐ 이 코드는 'ald_data.csv' 파일을 찾습니다. ⭐
+DATA_FILE = 'ald_data.csv'
 MODEL_PATH = 'improved_ald_mimo_model.h5'
 PREPROCESSOR_PATH = 'ald_preprocessor.joblib'
 
@@ -52,7 +53,7 @@ def normalize_col_name(col):
     col_name = re.sub(r'\s*\([^)]*\)', '', col).strip() 
     col_name = re.sub(r'[^a-zA-Z0-9_]', '_', col_name).strip('_')
     
-    # 명시적 이름 매핑 (강력한 호환성 확보)
+    # 명시적 이름 매핑
     if 'Precursor' == col_name or 'Precursor_Pulse_Time' in col_name: return 'Precursor_Pulse_Time' if 'Pulse_Time' in col_name else 'Precursor'
     if 'Co_reactant' == col_name or 'Co_reactant_Pulse_Time' in col_name: return 'Co_reactant_Pulse_Time' if 'Pulse_Time' in col_name else 'Co-reactant'
     if 'Purge_Gas' == col_name: return 'Purge Gas'
@@ -176,7 +177,8 @@ def train_and_save_model():
         Dense(64, activation='relu'),
         Dropout(0.2),
         Dense(32, activation='relu'),
-        Dense(output_dim, activation='linear')
+        # ⭐ [FIX] GPC 음수 오류 해결: final activation을 'relu'로 변경하여 0 이상 보장
+        Dense(output_dim, activation='relu') 
     ])
 
     improved_model.compile(
@@ -238,6 +240,7 @@ def run_single_prediction_test(model, preprocessor):
     print("\n\n🔥 예측된 박막 특성 (Y):")
     for i, target in enumerate(TARGET_FEATURES):
         display_name = TARGET_FEATURES_DISPLAY.get(target, target)
+        # GPC가 0 이상으로 예측될 것입니다.
         print(f"  {display_name:<25}: {Y_predicted[i]:.4f}")
     print("="*50)
 
@@ -247,6 +250,7 @@ def load_ai_assets():
     """저장된 AI 모델과 전처리기를 로드"""
     global loaded_model, loaded_preprocessor
     try:
+        # Keras 호환성 확보를 위해 custom_objects 없이 로드
         loaded_model = load_model(MODEL_PATH) 
         loaded_preprocessor = joblib.load(PREPROCESSOR_PATH)
         return loaded_model, loaded_preprocessor
