@@ -1,9 +1,6 @@
-streamlit
 pandas
-scikit-learn
-xgboost
 numpy
-requests
-openpyxl
-google-search-results
-pdfplumber
+scikit-learn
+tensorflow
+keras
+joblib
