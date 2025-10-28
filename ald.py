@@ -16,8 +16,8 @@ from tensorflow.keras.callbacks import EarlyStopping
 # Keras 로드 시 경고 메시지 방지
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-# --- 0. 전역 변수 및 파일 경로 설정 ---
-DATA_FILE = '파라미터 정리1.csv'
+# --- 0. 전역 변수 및 파일 경로 설정 (파일명 일치 확인 완료) ---
+DATA_FILE = 'ald_data.csv'  # ⭐ 이 이름으로 파일이 존재해야 합니다.
 MODEL_PATH = 'improved_ald_mimo_model.h5'
 PREPROCESSOR_PATH = 'ald_preprocessor.joblib'
 
@@ -52,7 +52,7 @@ def normalize_col_name(col):
     col_name = re.sub(r'\s*\([^)]*\)', '', col).strip() 
     col_name = re.sub(r'[^a-zA-Z0-9_]', '_', col_name).strip('_')
     
-    # 명시적 이름 매핑
+    # 명시적 이름 매핑 (강력한 호환성 확보)
     if 'Precursor' == col_name or 'Precursor_Pulse_Time' in col_name: return 'Precursor_Pulse_Time' if 'Pulse_Time' in col_name else 'Precursor'
     if 'Co_reactant' == col_name or 'Co_reactant_Pulse_Time' in col_name: return 'Co_reactant_Pulse_Time' if 'Pulse_Time' in col_name else 'Co-reactant'
     if 'Purge_Gas' == col_name: return 'Purge Gas'
@@ -179,11 +179,10 @@ def train_and_save_model():
         Dense(output_dim, activation='linear')
     ])
 
-    # [FIX]: compile 시 문자열 이름('mse', 'mae')을 사용하여 저장/로드 호환성을 높임
     improved_model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
-        loss='mse', # 문자열 사용
-        metrics=['mae'] # 문자열 사용
+        loss='mse', 
+        metrics=['mae'] 
     )
 
     print("--- AI 모델 학습 시작 (150 Epochs) ---")
@@ -248,8 +247,6 @@ def load_ai_assets():
     """저장된 AI 모델과 전처리기를 로드"""
     global loaded_model, loaded_preprocessor
     try:
-        # [FIX]: load_model 시 custom_objects를 제거하거나 Keras 기본 이름을 사용합니다.
-        # Keras가 기본적으로 'mse'와 'mae'를 인식하도록 custom_objects=None으로 로드합니다.
         loaded_model = load_model(MODEL_PATH) 
         loaded_preprocessor = joblib.load(PREPROCESSOR_PATH)
         return loaded_model, loaded_preprocessor
