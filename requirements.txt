@@ -1,7 +1,6 @@
-flask
 pandas
 numpy
 scikit-learn
-tensorflow==2.15.0 # 최신 버전 호환성 문제 방지를 위해 특정 버전을 지정 (선택 사항)
+tensorflow
 keras
 joblib
