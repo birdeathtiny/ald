@@ -1,3 +1,4 @@
+# ... (앞부분 import 및 상수 정의는 동일) ...
 import pandas as pd
 import numpy as np
 import torch
@@ -9,6 +10,7 @@ import joblib
 import os
 import sys
 import streamlit as st
+# ... (클래스 ALDHybridModel, SelfConsistentLoss 정의는 동일) ...
 
 # ==========================================
 # 0. 환경 설정 및 물리 상수 정의
@@ -29,7 +31,7 @@ MIN_COREACTANT_PULSE_S = 0.1
 MIN_PURGE_S = 0.5
 
 # 학습 상수
-EPOCHS = 300 # Streamlit에서 너무 길면 타임아웃 발생 가능성 때문에 낮춥니다.
+EPOCHS = 300 
 LEARNING_RATE = 0.001
 
 # 파일 경로
@@ -51,9 +53,8 @@ process_cols_base = [
 new_input_features = ['Knudsen_Number (Kn)', 'Damkohler_Number (Da)']
 process_cols_all = process_cols_base + new_input_features
 
-
 # ==========================================
-# 1. 모델 클래스 정의
+# 1. 모델 클래스 정의 (이전 코드와 동일)
 # ==========================================
 class ALDHybridModel(nn.Module):
     def __init__(self, input_dim, output_dim=2):
@@ -69,9 +70,10 @@ class ALDHybridModel(nn.Module):
         return self.net(x)
 
 # ==========================================
-# 2. 물리적 일관성 손실 함수 클래스
+# 2. 물리적 일관성 손실 함수 클래스 (이전 코드와 동일)
 # ==========================================
 class SelfConsistentLoss(nn.Module):
+    # ... (SelfConsistentLoss 클래스 내용은 이전 답변과 동일) ...
     def __init__(self, x_mins, x_ranges, y_mins, y_ranges, indices, output_indices, device):
         super(SelfConsistentLoss, self).__init__()
         self.x_mins = x_mins.to(device)
@@ -128,17 +130,17 @@ class SelfConsistentLoss(nn.Module):
         return total_loss
 
 # ==========================================
-# 3. 데이터 로딩 및 전처리 (학습 및 최적화 공통)
+# 3. 데이터 로딩 및 전처리 (수정: Tensor 대신 NumPy 배열 저장)
 # ==========================================
 @st.cache_resource
 def load_and_preprocess_data():
-    """데이터 로딩, 피처 엔지니어링, 인덱스 계산 및 스케일러 학습/로드."""
+    """데이터 로딩, 피처 엔지니어링, 스케일러 학습, NumPy 배열 저장."""
     
     script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
     file_path = os.path.join(script_dir, DATA_FILE)
 
     try:
-        # 데이터 로딩 및 클리닝 (기존 로직 유지)
+        # ... (데이터 로딩, 클리닝, 피처 엔지니어링 로직은 동일) ...
         df = pd.read_csv(file_path, encoding='cp949')
         df.columns = df.columns.str.strip().str.replace('"', '', regex=False)
         numeric_cols = process_cols_base + ['Thickness (nm)', 'GPC (A/cycle)']
@@ -150,19 +152,22 @@ def load_and_preprocess_data():
         df_clean[process_cols_base] = df_clean[process_cols_base].fillna(0)
         df_clean['Precursor'] = df_clean['Precursor'].fillna('Unknown')
         
-        # 물리 기반 피처 엔지니어링 (기존 로직 유지)
         T_k = df_clean['Temperature (c)'] + 273.15
         P_torr = df_clean['Pressure (torr)']
         df_clean['Lambda (m)'] = K_LAMBDA * T_k / (P_torr + EPSILON)
         df_clean['Knudsen_Number (Kn)'] = df_clean['Lambda (m)'] / L_CHARACTERISTIC_LENGTH_M
+
         reaction_rate_proxy = df_clean['GPC (A/cycle)']
         transport_rate_proxy = df_clean['Precursor Flow Rate (cm3/min)'] / L_CHARACTERISTIC_LENGTH_M
         df_clean['Damkohler_Number (Da)'] = K_DA * reaction_rate_proxy / (transport_rate_proxy + EPSILON)
+
         df_clean['Total_Cycle_Time (s)'] = df_clean['Precursor_Pulse Time (s)'] + df_clean['Co-reactant_Pulse Time (s)'] + 2 * df_clean['Purge Time (s)']
         df_clean['R_max (A/s)'] = df_clean['GPC (A/cycle)'] / (df_clean['Total_Cycle_Time (s)'] + EPSILON)
+
         precursor_inflow_proxy = df_clean['Precursor Flow Rate (cm3/min)'] * df_clean['Precursor_Pulse Time (s)']
         deposited_proxy = df_clean['GPC (A/cycle)'] * WAFER_SURFACE_AREA_M2
         df_clean['Utilization_Proxy'] = K_UTIL * deposited_proxy / (precursor_inflow_proxy + EPSILON)
+
         df_clean.replace([np.inf, -np.inf], np.nan, inplace=True)
         df_clean = df_clean.fillna(0)
         
@@ -191,9 +196,9 @@ def load_and_preprocess_data():
         X_scaled = scaler_X.fit_transform(df_features.values)
         Y_scaled = scaler_Y.fit_transform(df_outputs.values)
         
-        # PyTorch 텐서 준비
-        X_tensor = torch.tensor(X_scaled, dtype=torch.float32).to(DEVICE)
-        Y_tensor = torch.tensor(Y_scaled, dtype=torch.float32).to(DEVICE)
+        # 💡 [핵심 수정] PyTorch 텐서 대신 NumPy 배열로 저장
+        X_np = X_scaled
+        Y_np = Y_scaled
         
         # 인덱스 설정
         all_input_features = df_features.columns.to_list()
@@ -223,13 +228,13 @@ def load_and_preprocess_data():
         'indices': indices, 'output_indices': output_indices, 
         'precursor_map': precursor_map, 'all_input_features': all_input_features,
         'input_dim': df_features.shape[1],
-        'X_tensor': X_tensor, 'Y_tensor': Y_tensor
+        'X_np': X_np, 'Y_np': Y_np # 💡 NumPy 배열 저장
     }
     return data_artifacts, df_features.shape[1]
 
 
 # ==========================================
-# 4. 모델 학습/평가 함수 (train_or_load_model에서 사용)
+# 4. 모델 학습/로드 함수 (수정: 텐서 내부 생성 및 사용)
 # ==========================================
 def get_scaler_tensors(scaler, device):
     """스케일러 min/range를 텐서로 변환"""
@@ -238,6 +243,7 @@ def get_scaler_tensors(scaler, device):
     ranges[ranges == 0] = 1.0 
     return mins, ranges
 
+# ... (train_model, evaluate_model 함수는 동일) ...
 def train_model(model, train_loader, criterion, optimizer):
     model.train()
     total_loss = 0
@@ -262,19 +268,22 @@ def evaluate_model(model, test_loader, criterion):
             total_loss += loss.item()
     return total_loss / len(test_loader)
 
-
+# 💡 [핵심 수정] data_artifacts 딕셔너리는 해시 가능해야 함 (NumPy 배열은 가능)
 @st.cache_resource
 def train_or_load_model(data_artifacts, input_dim):
     """모델 파일이 없으면 학습하고 저장, 있으면 로드"""
     
     if os.path.exists(MODEL_PATH):
         # 1. 모델 로드
+        # ... (로딩 로직은 동일) ...
         model = ALDHybridModel(input_dim, output_dim=2).to(DEVICE)
         try:
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()
             
             # 스케일러/인코더 로드 (Streamlit에서 로드 시)
+            # data_artifacts에 저장된 객체는 학습 시 저장된 객체가 아님. 
+            # 따라서 로드 시 딕셔너리의 내용을 갱신해야 함.
             data_artifacts['scaler_X'] = joblib.load(SCALER_X_PATH)
             data_artifacts['scaler_Y'] = joblib.load(SCALER_Y_PATH)
             data_artifacts['encoder'] = joblib.load(ENCODER_PATH)
@@ -284,15 +293,16 @@ def train_or_load_model(data_artifacts, input_dim):
 
         except Exception as e:
             st.error(f"모델/스케일러 로드 오류: {e}. 다시 학습을 시도합니다.")
-            os.remove(MODEL_PATH) # 로드 실패 시 재학습 유도
+            os.remove(MODEL_PATH) 
             # continue to training
     
     # 2. 모델 학습 (파일이 없거나 로드 실패 시)
     st.warning("모델 파일이 없거나 오류가 발생했습니다. 새 모델 학습을 시작합니다. (약 1분 소요)")
     
-    X_tensor = data_artifacts['X_tensor']
-    Y_tensor = data_artifacts['Y_tensor']
-
+    # 💡 [핵심 수정] NumPy 배열을 텐서로 변환
+    X_tensor = torch.tensor(data_artifacts['X_np'], dtype=torch.float32).to(DEVICE)
+    Y_tensor = torch.tensor(data_artifacts['Y_np'], dtype=torch.float32).to(DEVICE)
+    
     dataset = TensorDataset(X_tensor, Y_tensor)
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
@@ -336,12 +346,13 @@ def train_or_load_model(data_artifacts, input_dim):
     model.eval()
     return model
 
-# ==========================================
-# 5. 그래디언트 기반 최적화 함수 (로직 유지)
-# ==========================================
+# ... (find_best_recipe_gradient 함수는 동일) ...
+# find_best_recipe_gradient 함수는 X_np, Y_np를 사용하지 않으므로, 그대로 사용 가능
 def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gpc, selected_precursor_name, weights, n_runs=50):
-    # 최적화 로직은 이전 답변과 동일하게 유지됩니다.
-    
+    # ... (최적화 로직은 이전 답변과 동일하게 유지) ...
+    # (코드가 길어 생략합니다. 이전 답변의 find_best_recipe_gradient 함수를 여기에 붙여넣으세요.)
+    # ...
+
     scaler_X = data_artifacts['scaler_X']
     scaler_Y = data_artifacts['scaler_Y']
     encoder = data_artifacts['encoder']
@@ -471,7 +482,7 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
 
 
 # ==========================================
-# 6. Streamlit 앱 메인 함수
+# 6. Streamlit 앱 메인 함수 (이전 코드와 동일)
 # ==========================================
 def main_app():
     st.set_page_config(page_title="ALD Recipe Optimizer", layout="wide")
@@ -484,13 +495,15 @@ def main_app():
         return
 
     # 2. 모델 학습/로드 (파일이 없으면 학습 진행)
-    model = train_or_load_model(data_artifacts, input_dim)
+    # data_artifacts는 NumPy 배열을 포함하므로 해시 가능
+    model = train_or_load_model(data_artifacts, input_dim) 
     if model is None:
         st.error("모델 학습 및 로드에 실패했습니다. 데이터 파일을 확인해주세요.")
         return
 
     precursor_list = list(data_artifacts['precursor_map'].keys())
     
+    # ... (사용자 입력 및 최적화 실행 로직은 동일) ...
     # 3. 사용자 입력 UI (사이드바)
     st.sidebar.header("🎯 목표 설정")
     selected_precursor_name = st.sidebar.selectbox("프리커서 선택", precursor_list)
@@ -545,6 +558,7 @@ def main_app():
                     
                 st.markdown("---")
                 st.info("💡 **Knudsen/Damköhler 수 해석:** 최적화된 레시피의 물리적 레짐을 확인하세요.")
+# ...
 
 if __name__ == "__main__":
     main_app()
