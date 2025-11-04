@@ -1,4 +1,4 @@
-# ... (앞부분 import 및 상수 정의는 동일) ...
+# ... (앞부분 import 및 클래스 정의는 동일) ...
 import pandas as pd
 import numpy as np
 import torch
@@ -10,13 +10,11 @@ import joblib
 import os
 import sys
 import streamlit as st
-# ... (클래스 ALDHybridModel, SelfConsistentLoss 정의는 동일) ...
 
 # ==========================================
-# 0. 환경 설정 및 물리 상수 정의
+# 0. 환경 설정 및 상수 정의
 # ==========================================
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# Streamlit은 보통 CPU 환경에서 실행되므로, GPU 사용 가능성이 낮음
 st.info(f"사용 장치: {DEVICE}")
 
 L_CHARACTERISTIC_LENGTH_M = 0.01 
@@ -30,7 +28,6 @@ MIN_PRECURSOR_PULSE_S = 0.1
 MIN_COREACTANT_PULSE_S = 0.1
 MIN_PURGE_S = 0.5
 
-# 학습 상수
 EPOCHS = 300 
 LEARNING_RATE = 0.001
 
@@ -55,86 +52,20 @@ process_cols_all = process_cols_base + new_input_features
 
 # ==========================================
 # 1. 모델 클래스 정의 (이전 코드와 동일)
+# ...
 # ==========================================
-class ALDHybridModel(nn.Module):
-    def __init__(self, input_dim, output_dim=2):
-        super(ALDHybridModel, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 128), nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 64), nn.ReLU(),
-            nn.Linear(64, 32), nn.ReLU(),
-            nn.Linear(32, output_dim)
-        )
-    def forward(self, x):
-        return self.net(x)
 
 # ==========================================
 # 2. 물리적 일관성 손실 함수 클래스 (이전 코드와 동일)
+# ...
 # ==========================================
-class SelfConsistentLoss(nn.Module):
-    # ... (SelfConsistentLoss 클래스 내용은 이전 답변과 동일) ...
-    def __init__(self, x_mins, x_ranges, y_mins, y_ranges, indices, output_indices, device):
-        super(SelfConsistentLoss, self).__init__()
-        self.x_mins = x_mins.to(device)
-        self.x_ranges = x_ranges.to(device)
-        self.y_mins = y_mins.to(device)
-        self.y_ranges = y_ranges.to(device)
-        self.indices = indices
-        self.output_indices = output_indices
-        self.mse_loss = nn.MSELoss()
-        self.epsilon = torch.tensor(EPSILON, device=device)
-
-    def _unscale_X(self, x_scaled, idx):
-        return x_scaled[:, idx] * self.x_ranges[idx] + self.x_mins[idx]
-
-    def _unscale_Y(self, y_scaled, idx):
-        if idx == self.output_indices['gpc']:
-            model_output_idx = 0
-        elif idx == self.output_indices['util']:
-            model_output_idx = 1
-        else:
-            raise ValueError(f"Invalid idx {idx} for unscaling model prediction in Loss.")
-
-        return y_scaled[:, model_output_idx] * self.y_ranges[idx] + self.y_mins[idx]
-
-
-    def forward(self, Y_pred_scaled, Y_true_scaled, X_batch_scaled):
-        
-        pred_gpc_unscaled = self._unscale_Y(Y_pred_scaled, self.output_indices['gpc'])
-        pred_util_unscaled = self._unscale_Y(Y_pred_scaled, self.output_indices['util'])
-        
-        true_gpc_unscaled = Y_true_scaled[:, self.output_indices['gpc']] * self.y_ranges[self.output_indices['gpc']] + self.y_mins[self.output_indices['gpc']]
-        true_util_unscaled = Y_true_scaled[:, self.output_indices['util']] * self.y_ranges[self.output_indices['util']] + self.y_mins[self.output_indices['util']]
-
-        loss_gpc = self.mse_loss(pred_gpc_unscaled, true_gpc_unscaled)
-        loss_util = self.mse_loss(pred_util_unscaled, true_util_unscaled)
-
-        unscaled_cycles = self._unscale_X(X_batch_scaled, self.indices['cycles'])
-        unscaled_pre_pulse = self._unscale_X(X_batch_scaled, self.indices['pre_pulse'])
-        unscaled_co_pulse = self._unscale_X(X_batch_scaled, self.indices['co_pulse'])
-        unscaled_purge = self._unscale_X(X_batch_scaled, self.indices['purge'])
-        
-        calc_total_time = unscaled_pre_pulse + unscaled_co_pulse + 2 * unscaled_purge
-        calc_rmax = pred_gpc_unscaled / (calc_total_time + self.epsilon)
-        calc_thick = pred_gpc_unscaled * unscaled_cycles * 0.1
-        
-        true_rmax_unscaled = Y_true_scaled[:, self.output_indices['rmax']] * self.y_ranges[self.output_indices['rmax']] + self.y_mins[self.output_indices['rmax']]
-        true_thick_unscaled = Y_true_scaled[:, self.output_indices['thick']] * self.y_ranges[self.output_indices['thick']] + self.y_mins[self.output_indices['thick']]
-
-        loss_rmax = self.mse_loss(calc_rmax, true_rmax_unscaled)
-        loss_thick = self.mse_loss(calc_thick, true_thick_unscaled)
-        
-        total_loss = loss_gpc + loss_util + loss_rmax + loss_thick
-        
-        return total_loss
 
 # ==========================================
-# 3. 데이터 로딩 및 전처리 (수정: Tensor 대신 NumPy 배열 저장)
+# 3. 데이터 로딩 및 전처리 (수정: Scikit-learn 객체를 파일로 저장)
 # ==========================================
 @st.cache_resource
 def load_and_preprocess_data():
-    """데이터 로딩, 피처 엔지니어링, 스케일러 학습, NumPy 배열 저장."""
+    """데이터 로딩, 피처 엔지니어링, 스케일러/인코더 학습 후 저장, NumPy 배열 반환."""
     
     script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
     file_path = os.path.join(script_dir, DATA_FILE)
@@ -180,23 +111,24 @@ def load_and_preprocess_data():
             if col in df_clean.columns:
                 df_clean[col] = df_clean[col].clip(lower=0)
         
-        # 인코딩 및 데이터프레임 구성
+        # 인코딩 및 스케일러 학습
         encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
         precursor_encoded = encoder.fit_transform(df_clean[['Precursor']])
-        precursor_columns = encoder.get_feature_names_out(['Precursor'])
-        precursor_df = pd.DataFrame(precursor_encoded, columns=precursor_columns, index=df_clean.index)
-        precursor_map = {name.replace('Precursor_', ''): name for name in encoder.categories_[0]}
-        
-        df_features = df_clean[process_cols_all].join(precursor_df)
-        df_outputs = df_clean[output_cols_all]
         
         # 스케일러 학습
+        df_features = df_clean[process_cols_all].join(pd.DataFrame(precursor_encoded, columns=encoder.get_feature_names_out(['Precursor']), index=df_clean.index))
+        df_outputs = df_clean[output_cols_all]
         scaler_X = MinMaxScaler()
         scaler_Y = MinMaxScaler()
         X_scaled = scaler_X.fit_transform(df_features.values)
         Y_scaled = scaler_Y.fit_transform(df_outputs.values)
-        
-        # 💡 [핵심 수정] PyTorch 텐서 대신 NumPy 배열로 저장
+
+        # 💡 [핵심 수정 1] Scikit-learn 객체는 즉시 파일로 저장하여 캐싱 경고를 피함
+        joblib.dump(scaler_X, SCALER_X_PATH)
+        joblib.dump(scaler_Y, SCALER_Y_PATH)
+        joblib.dump(encoder, ENCODER_PATH)
+
+        # 텐서 대신 NumPy 배열로 저장
         X_np = X_scaled
         Y_np = Y_scaled
         
@@ -214,6 +146,7 @@ def load_and_preprocess_data():
             'rmax': output_cols_all.index('R_max (A/s)'),
             'thick': output_cols_all.index('Thickness (nm)'),
         }
+        precursor_map = {name.replace('Precursor_', ''): name for name in encoder.categories_[0]}
 
     except FileNotFoundError:
         st.error(f"오류: '{DATA_FILE}' 파일을 찾을 수 없습니다. 데이터 파일을 확인해주세요.")
@@ -222,84 +155,60 @@ def load_and_preprocess_data():
         st.error(f"데이터 전처리 오류: {e}")
         return None, None
 
-    # 반환 값
+    # 💡 [핵심 수정 2] data_artifacts는 해시 가능한 NumPy 배열과 기본 타입만 포함
     data_artifacts = {
-        'scaler_X': scaler_X, 'scaler_Y': scaler_Y, 'encoder': encoder,
+        'X_np': X_np, 'Y_np': Y_np, # NumPy 배열
         'indices': indices, 'output_indices': output_indices, 
         'precursor_map': precursor_map, 'all_input_features': all_input_features,
-        'input_dim': df_features.shape[1],
-        'X_np': X_np, 'Y_np': Y_np # 💡 NumPy 배열 저장
+        'input_dim': df_features.shape[1]
     }
     return data_artifacts, df_features.shape[1]
 
-
 # ==========================================
-# 4. 모델 학습/로드 함수 (수정: 텐서 내부 생성 및 사용)
+# 4. 모델 학습/로드 함수 (수정: Scikit-learn 객체를 파일에서 로드)
 # ==========================================
-def get_scaler_tensors(scaler, device):
-    """스케일러 min/range를 텐서로 변환"""
-    mins = torch.tensor(scaler.min_, dtype=torch.float32, device=device)
-    ranges = torch.tensor(scaler.data_range_, dtype=torch.float32, device=device)
-    ranges[ranges == 0] = 1.0 
-    return mins, ranges
 
 # ... (train_model, evaluate_model 함수는 동일) ...
-def train_model(model, train_loader, criterion, optimizer):
-    model.train()
-    total_loss = 0
-    for X_batch, Y_batch in train_loader:
-        X_batch, Y_batch = X_batch.to(DEVICE), Y_batch.to(DEVICE)
-        Y_pred = model(X_batch)
-        loss = criterion(Y_pred, Y_batch, X_batch)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-    return total_loss / len(train_loader)
 
-def evaluate_model(model, test_loader, criterion):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for X_batch, Y_batch in test_loader:
-            X_batch, Y_batch = X_batch.to(DEVICE), Y_batch.to(DEVICE)
-            Y_pred = model(X_batch)
-            loss = criterion(Y_pred, Y_batch, X_batch)
-            total_loss += loss.item()
-    return total_loss / len(test_loader)
-
-# 💡 [핵심 수정] data_artifacts 딕셔너리는 해시 가능해야 함 (NumPy 배열은 가능)
 @st.cache_resource
 def train_or_load_model(data_artifacts, input_dim):
     """모델 파일이 없으면 학습하고 저장, 있으면 로드"""
     
+    # 💡 [핵심 수정 3] Scikit-learn 객체를 파일에서 로드
+    try:
+        scaler_X = joblib.load(SCALER_X_PATH)
+        scaler_Y = joblib.load(SCALER_Y_PATH)
+        encoder = joblib.load(ENCODER_PATH)
+    except FileNotFoundError:
+        # 데이터 전처리에서 파일 저장이 실패했거나 (첫 실행 시), 파일이 누락된 경우
+        st.error("오류: 스케일러/인코더 파일 로드 실패. 데이터 전처리 (`load_and_preprocess_data`)를 확인하세요.")
+        return None
+    except Exception as e:
+        st.error(f"오류: 스케일러/인코더 파일 로드 중 예외 발생: {e}")
+        return None
+    
+    # 딕셔너리 업데이트 (최적화 함수에서 사용)
+    data_artifacts['scaler_X'] = scaler_X
+    data_artifacts['scaler_Y'] = scaler_Y
+    data_artifacts['encoder'] = encoder
+    
     if os.path.exists(MODEL_PATH):
         # 1. 모델 로드
-        # ... (로딩 로직은 동일) ...
         model = ALDHybridModel(input_dim, output_dim=2).to(DEVICE)
         try:
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()
-            
-            # 스케일러/인코더 로드 (Streamlit에서 로드 시)
-            # data_artifacts에 저장된 객체는 학습 시 저장된 객체가 아님. 
-            # 따라서 로드 시 딕셔너리의 내용을 갱신해야 함.
-            data_artifacts['scaler_X'] = joblib.load(SCALER_X_PATH)
-            data_artifacts['scaler_Y'] = joblib.load(SCALER_Y_PATH)
-            data_artifacts['encoder'] = joblib.load(ENCODER_PATH)
-
             st.success("💾 학습된 모델과 스케일러를 성공적으로 로드했습니다.")
             return model
-
         except Exception as e:
-            st.error(f"모델/스케일러 로드 오류: {e}. 다시 학습을 시도합니다.")
+            st.error(f"모델 파일 로드 오류: {e}. 다시 학습을 시도합니다.")
             os.remove(MODEL_PATH) 
             # continue to training
     
     # 2. 모델 학습 (파일이 없거나 로드 실패 시)
     st.warning("모델 파일이 없거나 오류가 발생했습니다. 새 모델 학습을 시작합니다. (약 1분 소요)")
     
-    # 💡 [핵심 수정] NumPy 배열을 텐서로 변환
+    # NumPy 배열을 텐서로 변환
     X_tensor = torch.tensor(data_artifacts['X_np'], dtype=torch.float32).to(DEVICE)
     Y_tensor = torch.tensor(data_artifacts['Y_np'], dtype=torch.float32).to(DEVICE)
     
@@ -319,8 +228,8 @@ def train_or_load_model(data_artifacts, input_dim):
     model = ALDHybridModel(input_dim, output_dim=2).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
-    x_mins, x_ranges = get_scaler_tensors(data_artifacts['scaler_X'], DEVICE)
-    y_mins, y_ranges = get_scaler_tensors(data_artifacts['scaler_Y'], DEVICE)
+    x_mins, x_ranges = get_scaler_tensors(scaler_X, DEVICE) # 로드된 스케일러 사용
+    y_mins, y_ranges = get_scaler_tensors(scaler_Y, DEVICE)
     criterion = SelfConsistentLoss(x_mins, x_ranges, y_mins, y_ranges, data_artifacts['indices'], data_artifacts['output_indices'], DEVICE)
     
     # Streamlit에서 진행 상황을 표시
@@ -336,23 +245,19 @@ def train_or_load_model(data_artifacts, input_dim):
             
         progress_bar.progress((epoch + 1) / EPOCHS)
     
-    # 3. 모델 및 스케일러 저장
+    # 3. 모델 저장 (스케일러/인코더는 이미 저장됨)
     torch.save(model.state_dict(), MODEL_PATH)
-    joblib.dump(data_artifacts['scaler_X'], SCALER_X_PATH)
-    joblib.dump(data_artifacts['scaler_Y'], SCALER_Y_PATH)
-    joblib.dump(data_artifacts['encoder'], ENCODER_PATH)
     
     status_text.success("🎉 모델 학습 완료 및 파일 저장 완료!")
     model.eval()
     return model
 
 # ... (find_best_recipe_gradient 함수는 동일) ...
-# find_best_recipe_gradient 함수는 X_np, Y_np를 사용하지 않으므로, 그대로 사용 가능
+# find_best_recipe_gradient 함수는 data_artifacts 딕셔너리에서 스케일러를 사용하므로
+# train_or_load_model에서 딕셔너리에 스케일러를 추가해야 합니다. (위에서 처리됨)
 def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gpc, selected_precursor_name, weights, n_runs=50):
-    # ... (최적화 로직은 이전 답변과 동일하게 유지) ...
-    # (코드가 길어 생략합니다. 이전 답변의 find_best_recipe_gradient 함수를 여기에 붙여넣으세요.)
-    # ...
-
+    
+    # 딕셔너리에 추가된 스케일러 객체 로드
     scaler_X = data_artifacts['scaler_X']
     scaler_Y = data_artifacts['scaler_Y']
     encoder = data_artifacts['encoder']
@@ -360,6 +265,7 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
     output_indices = data_artifacts['output_indices']
     all_input_features = data_artifacts['all_input_features']
     
+    # ... (나머지 최적화 로직은 동일하게 유지) ...
     x_mins_opt, x_ranges_opt = get_scaler_tensors(scaler_X, DEVICE)
     y_mins_opt, y_ranges_opt = get_scaler_tensors(scaler_Y, DEVICE)
 
@@ -489,13 +395,13 @@ def main_app():
     st.title("🧪 AI ALD 하이브리드 레시피 최적화 시스템")
     st.markdown("---")
 
-    # 1. 데이터 로드 및 전처리
+    # 1. 데이터 로드 및 전처리 (NumPy 배열 및 메타데이터 반환)
     data_artifacts, input_dim = load_and_preprocess_data()
     if data_artifacts is None:
         return
 
     # 2. 모델 학습/로드 (파일이 없으면 학습 진행)
-    # data_artifacts는 NumPy 배열을 포함하므로 해시 가능
+    # data_artifacts는 해시 가능한 객체만 포함
     model = train_or_load_model(data_artifacts, input_dim) 
     if model is None:
         st.error("모델 학습 및 로드에 실패했습니다. 데이터 파일을 확인해주세요.")
@@ -503,7 +409,7 @@ def main_app():
 
     precursor_list = list(data_artifacts['precursor_map'].keys())
     
-    # ... (사용자 입력 및 최적화 실행 로직은 동일) ...
+    # ... (나머지 UI 및 최적화 실행 로직은 동일) ...
     # 3. 사용자 입력 UI (사이드바)
     st.sidebar.header("🎯 목표 설정")
     selected_precursor_name = st.sidebar.selectbox("프리커서 선택", precursor_list)
@@ -558,7 +464,6 @@ def main_app():
                     
                 st.markdown("---")
                 st.info("💡 **Knudsen/Damköhler 수 해석:** 최적화된 레시피의 물리적 레짐을 확인하세요.")
-# ...
 
 if __name__ == "__main__":
     main_app()
