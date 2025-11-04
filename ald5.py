@@ -8,14 +8,14 @@ from sklearn.exceptions import NotFittedError
 import joblib
 import os
 import sys
-import streamlit as st # 💡 Streamlit 라이브러리 추가
+import streamlit as st
 
 # ==========================================
 # 0. 환경 설정 및 물리 상수 정의
 # ==========================================
-# Streamlit은 보통 CPU 환경에서 실행되므로, Device를 유동적으로 설정
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# print(f"Using device: {DEVICE}") # Streamlit에서는 print 대신 st.write 사용
+# Streamlit은 보통 CPU 환경에서 실행되므로, GPU 사용 가능성이 낮음
+st.info(f"사용 장치: {DEVICE}")
 
 L_CHARACTERISTIC_LENGTH_M = 0.01 
 WAFER_SURFACE_AREA_M2 = np.pi * (0.05**2) 
@@ -27,6 +27,17 @@ EPSILON = 1e-6
 MIN_PRECURSOR_PULSE_S = 0.1
 MIN_COREACTANT_PULSE_S = 0.1
 MIN_PURGE_S = 0.5
+
+# 학습 상수
+EPOCHS = 300 # Streamlit에서 너무 길면 타임아웃 발생 가능성 때문에 낮춥니다.
+LEARNING_RATE = 0.001
+
+# 파일 경로
+MODEL_PATH = 'ald_hybrid_model_v2.pth'
+SCALER_X_PATH = 'scaler_X_v2.pkl'
+SCALER_Y_PATH = 'scaler_Y_v2.pkl'
+ENCODER_PATH = 'encoder_precursor_v2.pkl'
+DATA_FILE = 'AI_ALD1.csv.csv'
 
 output_cols_all = [
     'GPC (A/cycle)', 'Utilization_Proxy', 'R_max (A/s)', 'Thickness (nm)'
@@ -40,8 +51,9 @@ process_cols_base = [
 new_input_features = ['Knudsen_Number (Kn)', 'Damkohler_Number (Da)']
 process_cols_all = process_cols_base + new_input_features
 
+
 # ==========================================
-# 1. 모델 클래스 정의 (저장된 모델 로드용)
+# 1. 모델 클래스 정의
 # ==========================================
 class ALDHybridModel(nn.Module):
     def __init__(self, input_dim, output_dim=2):
@@ -57,20 +69,78 @@ class ALDHybridModel(nn.Module):
         return self.net(x)
 
 # ==========================================
-# 2. 데이터 및 모델 로딩 (캐싱)
+# 2. 물리적 일관성 손실 함수 클래스
+# ==========================================
+class SelfConsistentLoss(nn.Module):
+    def __init__(self, x_mins, x_ranges, y_mins, y_ranges, indices, output_indices, device):
+        super(SelfConsistentLoss, self).__init__()
+        self.x_mins = x_mins.to(device)
+        self.x_ranges = x_ranges.to(device)
+        self.y_mins = y_mins.to(device)
+        self.y_ranges = y_ranges.to(device)
+        self.indices = indices
+        self.output_indices = output_indices
+        self.mse_loss = nn.MSELoss()
+        self.epsilon = torch.tensor(EPSILON, device=device)
+
+    def _unscale_X(self, x_scaled, idx):
+        return x_scaled[:, idx] * self.x_ranges[idx] + self.x_mins[idx]
+
+    def _unscale_Y(self, y_scaled, idx):
+        if idx == self.output_indices['gpc']:
+            model_output_idx = 0
+        elif idx == self.output_indices['util']:
+            model_output_idx = 1
+        else:
+            raise ValueError(f"Invalid idx {idx} for unscaling model prediction in Loss.")
+
+        return y_scaled[:, model_output_idx] * self.y_ranges[idx] + self.y_mins[idx]
+
+
+    def forward(self, Y_pred_scaled, Y_true_scaled, X_batch_scaled):
+        
+        pred_gpc_unscaled = self._unscale_Y(Y_pred_scaled, self.output_indices['gpc'])
+        pred_util_unscaled = self._unscale_Y(Y_pred_scaled, self.output_indices['util'])
+        
+        true_gpc_unscaled = Y_true_scaled[:, self.output_indices['gpc']] * self.y_ranges[self.output_indices['gpc']] + self.y_mins[self.output_indices['gpc']]
+        true_util_unscaled = Y_true_scaled[:, self.output_indices['util']] * self.y_ranges[self.output_indices['util']] + self.y_mins[self.output_indices['util']]
+
+        loss_gpc = self.mse_loss(pred_gpc_unscaled, true_gpc_unscaled)
+        loss_util = self.mse_loss(pred_util_unscaled, true_util_unscaled)
+
+        unscaled_cycles = self._unscale_X(X_batch_scaled, self.indices['cycles'])
+        unscaled_pre_pulse = self._unscale_X(X_batch_scaled, self.indices['pre_pulse'])
+        unscaled_co_pulse = self._unscale_X(X_batch_scaled, self.indices['co_pulse'])
+        unscaled_purge = self._unscale_X(X_batch_scaled, self.indices['purge'])
+        
+        calc_total_time = unscaled_pre_pulse + unscaled_co_pulse + 2 * unscaled_purge
+        calc_rmax = pred_gpc_unscaled / (calc_total_time + self.epsilon)
+        calc_thick = pred_gpc_unscaled * unscaled_cycles * 0.1
+        
+        true_rmax_unscaled = Y_true_scaled[:, self.output_indices['rmax']] * self.y_ranges[self.output_indices['rmax']] + self.y_mins[self.output_indices['rmax']]
+        true_thick_unscaled = Y_true_scaled[:, self.output_indices['thick']] * self.y_ranges[self.output_indices['thick']] + self.y_mins[self.output_indices['thick']]
+
+        loss_rmax = self.mse_loss(calc_rmax, true_rmax_unscaled)
+        loss_thick = self.mse_loss(calc_thick, true_thick_unscaled)
+        
+        total_loss = loss_gpc + loss_util + loss_rmax + loss_thick
+        
+        return total_loss
+
+# ==========================================
+# 3. 데이터 로딩 및 전처리 (학습 및 최적화 공통)
 # ==========================================
 @st.cache_resource
 def load_and_preprocess_data():
     """데이터 로딩, 피처 엔지니어링, 인덱스 계산 및 스케일러 학습/로드."""
-    file_name = 'AI_ALD1.csv.csv'
+    
     script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
-    file_path = os.path.join(script_dir, file_name)
+    file_path = os.path.join(script_dir, DATA_FILE)
 
     try:
-        # 1. 데이터 불러오기 (원래 전처리 로직)
+        # 데이터 로딩 및 클리닝 (기존 로직 유지)
         df = pd.read_csv(file_path, encoding='cp949')
         df.columns = df.columns.str.strip().str.replace('"', '', regex=False)
-        
         numeric_cols = process_cols_base + ['Thickness (nm)', 'GPC (A/cycle)']
         for col in numeric_cols:
             if col in df.columns:
@@ -80,42 +150,32 @@ def load_and_preprocess_data():
         df_clean[process_cols_base] = df_clean[process_cols_base].fillna(0)
         df_clean['Precursor'] = df_clean['Precursor'].fillna('Unknown')
         
-        # 2. 물리 기반 피처 엔지니어링 (Kn, Da, R_max, Util 등)
+        # 물리 기반 피처 엔지니어링 (기존 로직 유지)
         T_k = df_clean['Temperature (c)'] + 273.15
         P_torr = df_clean['Pressure (torr)']
         df_clean['Lambda (m)'] = K_LAMBDA * T_k / (P_torr + EPSILON)
         df_clean['Knudsen_Number (Kn)'] = df_clean['Lambda (m)'] / L_CHARACTERISTIC_LENGTH_M
-
         reaction_rate_proxy = df_clean['GPC (A/cycle)']
         transport_rate_proxy = df_clean['Precursor Flow Rate (cm3/min)'] / L_CHARACTERISTIC_LENGTH_M
         df_clean['Damkohler_Number (Da)'] = K_DA * reaction_rate_proxy / (transport_rate_proxy + EPSILON)
-
-        df_clean['Total_Cycle_Time (s)'] = df_clean['Precursor_Pulse Time (s)'] + \
-                                         df_clean['Co-reactant_Pulse Time (s)'] + \
-                                         2 * df_clean['Purge Time (s)']
+        df_clean['Total_Cycle_Time (s)'] = df_clean['Precursor_Pulse Time (s)'] + df_clean['Co-reactant_Pulse Time (s)'] + 2 * df_clean['Purge Time (s)']
         df_clean['R_max (A/s)'] = df_clean['GPC (A/cycle)'] / (df_clean['Total_Cycle_Time (s)'] + EPSILON)
-
-        precursor_inflow_proxy = df_clean['Precursor Flow Rate (cm3/min)'] * \
-                                 df_clean['Precursor_Pulse Time (s)']
+        precursor_inflow_proxy = df_clean['Precursor Flow Rate (cm3/min)'] * df_clean['Precursor_Pulse Time (s)']
         deposited_proxy = df_clean['GPC (A/cycle)'] * WAFER_SURFACE_AREA_M2
         df_clean['Utilization_Proxy'] = K_UTIL * deposited_proxy / (precursor_inflow_proxy + EPSILON)
-
         df_clean.replace([np.inf, -np.inf], np.nan, inplace=True)
         df_clean = df_clean.fillna(0)
         
         physically_non_negative_cols = [
-            'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)',
-            'Temperature (c)', 'Pressure (torr)', 'Purge Time (s)',
-            'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)',
-            'Co-reactant Flow Rate (cm3/min)',
-            'Knudsen_Number (Kn)', 'Damkohler_Number (Da)',
-            'Total_Cycle_Time (s)', 'R_max (A/s)', 'Utilization_Proxy'
+            'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Temperature (c)', 'Pressure (torr)', 'Purge Time (s)',
+            'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)',
+            'Knudsen_Number (Kn)', 'Damkohler_Number (Da)', 'Total_Cycle_Time (s)', 'R_max (A/s)', 'Utilization_Proxy'
         ]
         for col in physically_non_negative_cols:
             if col in df_clean.columns:
                 df_clean[col] = df_clean[col].clip(lower=0)
         
-        # 3. 인코딩 및 데이터프레임 구성
+        # 인코딩 및 데이터프레임 구성
         encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
         precursor_encoded = encoder.fit_transform(df_clean[['Precursor']])
         precursor_columns = encoder.get_feature_names_out(['Precursor'])
@@ -123,14 +183,19 @@ def load_and_preprocess_data():
         precursor_map = {name.replace('Precursor_', ''): name for name in encoder.categories_[0]}
         
         df_features = df_clean[process_cols_all].join(precursor_df)
+        df_outputs = df_clean[output_cols_all]
         
-        # 4. 스케일러 학습 (최적화 로직에 필요)
+        # 스케일러 학습
         scaler_X = MinMaxScaler()
         scaler_Y = MinMaxScaler()
-        scaler_X.fit(df_features.values)
-        scaler_Y.fit(df_clean[output_cols_all].values)
+        X_scaled = scaler_X.fit_transform(df_features.values)
+        Y_scaled = scaler_Y.fit_transform(df_outputs.values)
         
-        # 5. 인덱스 설정
+        # PyTorch 텐서 준비
+        X_tensor = torch.tensor(X_scaled, dtype=torch.float32).to(DEVICE)
+        Y_tensor = torch.tensor(Y_scaled, dtype=torch.float32).to(DEVICE)
+        
+        # 인덱스 설정
         all_input_features = df_features.columns.to_list()
         indices = {
             'cycles': all_input_features.index('Cycles (n)'),
@@ -146,38 +211,26 @@ def load_and_preprocess_data():
         }
 
     except FileNotFoundError:
-        st.error(f"오류: '{file_name}' 파일을 찾을 수 없습니다. 데이터 파일을 확인해주세요.")
-        return None
+        st.error(f"오류: '{DATA_FILE}' 파일을 찾을 수 없습니다. 데이터 파일을 확인해주세요.")
+        return None, None
     except ValueError as e:
         st.error(f"데이터 전처리 오류: {e}")
-        return None
+        return None, None
 
     # 반환 값
-    return {
+    data_artifacts = {
         'scaler_X': scaler_X, 'scaler_Y': scaler_Y, 'encoder': encoder,
         'indices': indices, 'output_indices': output_indices, 
         'precursor_map': precursor_map, 'all_input_features': all_input_features,
-        'input_dim': df_features.shape[1]
+        'input_dim': df_features.shape[1],
+        'X_tensor': X_tensor, 'Y_tensor': Y_tensor
     }
+    return data_artifacts, df_features.shape[1]
 
-@st.cache_resource
-def load_trained_model(input_dim):
-    """모델 파일 로드 (학습된 모델이 없으면 None 반환)"""
-    model_path = 'ald_hybrid_model_v2.pth'
-    
-    if not os.path.exists(model_path):
-        st.error(f"오류: 학습된 모델 파일 '{model_path}'을 찾을 수 없습니다. 학습 과정을 먼저 실행해주세요.")
-        return None
-        
-    model = ALDHybridModel(input_dim, output_dim=2).to(DEVICE)
-    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
-    model.eval()
-    return model
 
 # ==========================================
-# 3. 최적화 유틸리티 함수 (Streamlit 환경 맞춤)
+# 4. 모델 학습/평가 함수 (train_or_load_model에서 사용)
 # ==========================================
-
 def get_scaler_tensors(scaler, device):
     """스케일러 min/range를 텐서로 변환"""
     mins = torch.tensor(scaler.min_, dtype=torch.float32, device=device)
@@ -185,12 +238,109 @@ def get_scaler_tensors(scaler, device):
     ranges[ranges == 0] = 1.0 
     return mins, ranges
 
-# 이 함수는 find_best_recipe_gradient 내부에 정의되어야 최적화에 사용 가능
+def train_model(model, train_loader, criterion, optimizer):
+    model.train()
+    total_loss = 0
+    for X_batch, Y_batch in train_loader:
+        X_batch, Y_batch = X_batch.to(DEVICE), Y_batch.to(DEVICE)
+        Y_pred = model(X_batch)
+        loss = criterion(Y_pred, Y_batch, X_batch)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    return total_loss / len(train_loader)
+
+def evaluate_model(model, test_loader, criterion):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for X_batch, Y_batch in test_loader:
+            X_batch, Y_batch = X_batch.to(DEVICE), Y_batch.to(DEVICE)
+            Y_pred = model(X_batch)
+            loss = criterion(Y_pred, Y_batch, X_batch)
+            total_loss += loss.item()
+    return total_loss / len(test_loader)
+
+
+@st.cache_resource
+def train_or_load_model(data_artifacts, input_dim):
+    """모델 파일이 없으면 학습하고 저장, 있으면 로드"""
+    
+    if os.path.exists(MODEL_PATH):
+        # 1. 모델 로드
+        model = ALDHybridModel(input_dim, output_dim=2).to(DEVICE)
+        try:
+            model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+            model.eval()
+            
+            # 스케일러/인코더 로드 (Streamlit에서 로드 시)
+            data_artifacts['scaler_X'] = joblib.load(SCALER_X_PATH)
+            data_artifacts['scaler_Y'] = joblib.load(SCALER_Y_PATH)
+            data_artifacts['encoder'] = joblib.load(ENCODER_PATH)
+
+            st.success("💾 학습된 모델과 스케일러를 성공적으로 로드했습니다.")
+            return model
+
+        except Exception as e:
+            st.error(f"모델/스케일러 로드 오류: {e}. 다시 학습을 시도합니다.")
+            os.remove(MODEL_PATH) # 로드 실패 시 재학습 유도
+            # continue to training
+    
+    # 2. 모델 학습 (파일이 없거나 로드 실패 시)
+    st.warning("모델 파일이 없거나 오류가 발생했습니다. 새 모델 학습을 시작합니다. (약 1분 소요)")
+    
+    X_tensor = data_artifacts['X_tensor']
+    Y_tensor = data_artifacts['Y_tensor']
+
+    dataset = TensorDataset(X_tensor, Y_tensor)
+    train_size = int(0.8 * len(dataset))
+    test_size = len(dataset) - train_size
+    
+    if train_size == 0 or test_size == 0:
+        st.error("데이터셋 크기가 너무 작아 학습을 진행할 수 없습니다.")
+        return None
+    
+    train_data, test_data = random_split(dataset, [train_size, test_size])
+    BATCH_SIZE = max(1, train_size // 4)
+    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=BATCH_SIZE)
+    
+    model = ALDHybridModel(input_dim, output_dim=2).to(DEVICE)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    
+    x_mins, x_ranges = get_scaler_tensors(data_artifacts['scaler_X'], DEVICE)
+    y_mins, y_ranges = get_scaler_tensors(data_artifacts['scaler_Y'], DEVICE)
+    criterion = SelfConsistentLoss(x_mins, x_ranges, y_mins, y_ranges, data_artifacts['indices'], data_artifacts['output_indices'], DEVICE)
+    
+    # Streamlit에서 진행 상황을 표시
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for epoch in range(EPOCHS):
+        train_loss = train_model(model, train_loader, criterion, optimizer)
+        
+        if (epoch + 1) % 50 == 0 or epoch == EPOCHS - 1:
+            test_loss = evaluate_model(model, test_loader, criterion)
+            status_text.text(f"Epoch [{epoch+1}/{EPOCHS}], Train Loss: {train_loss:.6f}, Test Loss: {test_loss:.6f}")
+            
+        progress_bar.progress((epoch + 1) / EPOCHS)
+    
+    # 3. 모델 및 스케일러 저장
+    torch.save(model.state_dict(), MODEL_PATH)
+    joblib.dump(data_artifacts['scaler_X'], SCALER_X_PATH)
+    joblib.dump(data_artifacts['scaler_Y'], SCALER_Y_PATH)
+    joblib.dump(data_artifacts['encoder'], ENCODER_PATH)
+    
+    status_text.success("🎉 모델 학습 완료 및 파일 저장 완료!")
+    model.eval()
+    return model
 
 # ==========================================
-# 4. 그래디언트 기반 다중 목표 최적화 함수 (로직 유지)
+# 5. 그래디언트 기반 최적화 함수 (로직 유지)
 # ==========================================
 def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gpc, selected_precursor_name, weights, n_runs=50):
+    # 최적화 로직은 이전 답변과 동일하게 유지됩니다.
     
     scaler_X = data_artifacts['scaler_X']
     scaler_Y = data_artifacts['scaler_Y']
@@ -199,11 +349,9 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
     output_indices = data_artifacts['output_indices']
     all_input_features = data_artifacts['all_input_features']
     
-    # 스케일러 텐서 준비
     x_mins_opt, x_ranges_opt = get_scaler_tensors(scaler_X, DEVICE)
     y_mins_opt, y_ranges_opt = get_scaler_tensors(scaler_Y, DEVICE)
 
-    # 유틸리티 함수 정의 (로직 오류 수정 반영)
     def unscale_X_torch(x_scaled, idx):
         return x_scaled[idx] * x_ranges_opt[idx] + x_mins_opt[idx]
 
@@ -216,13 +364,11 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
             raise ValueError(f"Invalid idx {idx} for unscaling model prediction.")
         return y_scaled[model_output_idx] * y_ranges_opt[idx] + y_mins_opt[idx]
 
-    # Precursor One-Hot Encoding
     precursor_one_hot = encoder.transform([[selected_precursor_name]])[0]
     precursor_ohe_tensor = torch.tensor(precursor_one_hot, dtype=torch.float32, device=DEVICE)
     
     process_cols_count = len(process_cols_all)
     
-    # 하드웨어 제약 조건 (Scaled) 계산
     def get_scaled_min_torch(unscaled_min, feature_idx):
         scaled_min = (unscaled_min - x_mins_opt[feature_idx]) / x_ranges_opt[feature_idx]
         return torch.clamp(scaled_min, 0.0, 1.0)
@@ -234,7 +380,6 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
     best_cost = torch.tensor(float('inf'), device=DEVICE)
     best_recipe_scaled_process = None
     
-    # 최적화 과정
     for run in range(n_runs):
         initial_guess_scaled_process = torch.rand(process_cols_count, device=DEVICE)
         initial_guess_scaled_process[indices['pre_pulse']] = torch.max(initial_guess_scaled_process[indices['pre_pulse']], scaled_min_pre_pulse)
@@ -254,7 +399,6 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
             X_full_scaled = torch.cat([X_process_guess, precursor_ohe_tensor])  
             Y_pred_scaled = model(X_full_scaled.unsqueeze(0)).squeeze(0)
             
-            # 비용 함수 계산 (수정된 인덱싱 로직 반영)
             pred_gpc_unscaled = unscale_Y_torch(Y_pred_scaled, output_indices['gpc'])
             pred_util_unscaled = unscale_Y_torch(Y_pred_scaled, output_indices['util'])
             
@@ -265,7 +409,7 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
             
             calc_total_time = unscaled_pre_pulse + unscaled_co_pulse + 2 * unscaled_purge
             calc_rmax = pred_gpc_unscaled / (calc_total_time + EPSILON)
-            calc_thick = pred_gpc_unscaled * unscaled_cycles * 0.1 # Å -> nm
+            calc_thick = pred_gpc_unscaled * unscaled_cycles * 0.1
             
             thickness_error = (calc_thick - target_thickness)**2
             gpc_error = (pred_gpc_unscaled - target_gpc)**2
@@ -289,13 +433,10 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
     if best_recipe_scaled_process is None:
         return "Optimization failed to find a valid solution."
 
-    # --- 최종 최적 레시피 해석 ---
     best_X_scaled_full = torch.cat([best_recipe_scaled_process, precursor_ohe_tensor])
-    
     best_recipe_full_unscaled = scaler_X.inverse_transform(best_X_scaled_full.cpu().numpy().reshape(1, -1))[0]
     
     pred_Y_scaled = model(best_X_scaled_full.unsqueeze(0)).squeeze(0).detach()
-    
     pred_gpc_unscaled = unscale_Y_torch(pred_Y_scaled, output_indices['gpc']).cpu().numpy()
     pred_util_unscaled = unscale_Y_torch(pred_Y_scaled, output_indices['util']).cpu().numpy()
     
@@ -330,55 +471,46 @@ def find_best_recipe_gradient(model, data_artifacts, target_thickness, target_gp
 
 
 # ==========================================
-# 5. Streamlit 앱 메인 함수
+# 6. Streamlit 앱 메인 함수
 # ==========================================
 def main_app():
     st.set_page_config(page_title="ALD Recipe Optimizer", layout="wide")
     st.title("🧪 AI ALD 하이브리드 레시피 최적화 시스템")
     st.markdown("---")
 
-    # 1. 데이터 및 모델 로드
-    data_artifacts = load_and_preprocess_data()
+    # 1. 데이터 로드 및 전처리
+    data_artifacts, input_dim = load_and_preprocess_data()
     if data_artifacts is None:
         return
 
-    model = load_trained_model(data_artifacts['input_dim'])
+    # 2. 모델 학습/로드 (파일이 없으면 학습 진행)
+    model = train_or_load_model(data_artifacts, input_dim)
     if model is None:
-        st.info("모델 학습 후 실행해주세요.")
+        st.error("모델 학습 및 로드에 실패했습니다. 데이터 파일을 확인해주세요.")
         return
 
     precursor_list = list(data_artifacts['precursor_map'].keys())
     
-    # 2. 사용자 입력 UI (사이드바)
+    # 3. 사용자 입력 UI (사이드바)
     st.sidebar.header("🎯 목표 설정")
-    selected_precursor_name = st.sidebar.selectbox(
-        "프리커서 선택", precursor_list
-    )
-    
-    target_thickness = st.sidebar.number_input(
-        "목표 막 두께 (nm)", value=50.0, min_value=0.1, max_value=1000.0, step=1.0
-    )
-    target_gpc = st.sidebar.number_input(
-        "목표 GPC (Å/cycle)", value=1.5, min_value=0.01, max_value=5.0, step=0.01
-    )
+    selected_precursor_name = st.sidebar.selectbox("프리커서 선택", precursor_list)
+    target_thickness = st.sidebar.number_input("목표 막 두께 (nm)", value=50.0, min_value=0.1, max_value=1000.0, step=1.0)
+    target_gpc = st.sidebar.number_input("목표 GPC (Å/cycle)", value=1.5, min_value=0.01, max_value=5.0, step=0.01)
     
     st.sidebar.header("⚖️ 다중 목표 가중치")
     w_T = st.sidebar.slider("두께 오차 (w_T)", 0.0, 5.0, 1.0, 0.1)
     w_G = st.sidebar.slider("GPC 오차 (w_G)", 0.0, 5.0, 1.5, 0.1)
     w_R = st.sidebar.slider("R_max (생산성) (w_R)", 0.0, 5.0, 0.5, 0.1)
     w_U = st.sidebar.slider("이용률 (효율) (w_U)", 0.0, 5.0, 0.2, 0.1)
-    
     user_weights = {'w_T': w_T, 'w_G': w_G, 'w_R': w_R, 'w_U': w_U}
-    
     n_runs = st.sidebar.number_input("최적화 랜덤 시작점 (n_runs)", value=50, min_value=10, max_value=200, step=10)
 
 
-    # 3. 최적화 실행 버튼
+    # 4. 최적화 실행 버튼
     if st.button("🚀 최적 레시피 검색 시작"):
         
         with st.spinner("그래디언트 기반 최적 레시피를 검색 중입니다..."):
             
-            # 최적화 함수 실행
             result = find_best_recipe_gradient(
                 model, data_artifacts, 
                 target_thickness, target_gpc, 
@@ -393,7 +525,6 @@ def main_app():
                 st.success("✅ 최적화 레시피 검색 완료!")
                 st.subheader("결과 요약 및 성능 지표")
                 
-                # 4. 결과 표시
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -401,8 +532,6 @@ def main_app():
 
                 with col2:
                     st.subheader("최적화된 공정 조건 (입력 변수)")
-                    
-                    # 원하는 컬럼만 선택하여 깔끔하게 표시
                     display_cols = ['Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Purge Time (s)',
                                     'Cycles (n)', 'Temperature (c)', 'Pressure (torr)',
                                     'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)',
@@ -410,13 +539,12 @@ def main_app():
                     
                     recipe_display = recipe_df[display_cols].T
                     recipe_display.columns = ['Optimized Value']
-                    # 소수점 3자리로 포맷팅
                     recipe_display['Optimized Value'] = recipe_display['Optimized Value'].apply(lambda x: f"{x:.3f}")
                     
                     st.table(recipe_display)
                     
                 st.markdown("---")
-                st.info("💡 **Knudsen/Damköhler 수 해석:** Kn < 0.1은 점성 영역, Kn > 10은 분자 흐름 영역을 나타냅니다. Da 수는 반응 속도 대비 수송 속도의 비율을 나타냅니다.")
+                st.info("💡 **Knudsen/Damköhler 수 해석:** 최적화된 레시피의 물리적 레짐을 확인하세요.")
 
 if __name__ == "__main__":
     main_app()
