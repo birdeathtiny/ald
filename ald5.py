@@ -8,17 +8,16 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
+from scipy.optimize import minimize
 from typing import Dict, Any, List, Tuple
-from scipy.optimize import minimize # 최적화 라이브러리
 
 # --- 0. 물리/화학 상수 테이블 정의 ---
-N_A = 6.022e23 # 아보가드로 수
-k_B = 1.38e-23 # 볼츠만 상수
-# 전구체별 물리적/화학적 상수 (문헌 기반 근사치)
+N_A = 6.022e23 
+k_B = 1.38e-23 
 PRECURSOR_CONSTANTS = {
     "TMA": {"mass_g_mol": 72.12, "diameter_m": 5.0e-10, "sticking_c": 0.005, "max_sites_q": 1.0e18}, 
     "TDMAH": {"mass_g_mol": 204.37, "diameter_m": 8.5e-10, "sticking_c": 0.001, "max_sites_q": 0.8e18},
-    "TEMAHf": {"mass_g_mol": 406.88, "diameter_m": 12.0e-10, "sticking_c": 0.005, "max_sites_q": 0.5e18},
+    "TEMAHf": {"mass_g_mol": 406.88, "diameter_m": 12.0e-10, "sticking_c": 0.005, "max_sites_q": 0.5e18}, 
     "Zr(NEt2)4": {"mass_g_mol": 379.79, "diameter_m": 11.0e-10, "sticking_c": 0.008, "max_sites_q": 0.6e18}
 }
 BEST_MODEL_PATH = 'best_ald_model.pth' 
@@ -50,20 +49,37 @@ df_processed = df.drop(columns=cols_to_drop_high_nan)
 categorical_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
 df_encoded = pd.get_dummies(df_processed.drop(columns=['순서']), columns=categorical_cols, dummy_na=False)
 
-# AI가 무시할 컬럼 (물리 모델 전용 또는 사용자 입력값)
+
+# --- 💡 AI 예측 대상 (8개) 정의 (NameError 해결) ---
+target_cols = [
+    'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
+    'Density (g/cm3)', 'GPC (A/cycle)',
+    'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)', 
+    'Breakdown Field (MV/cm)'
+]
+
+# --- 💡 AI가 무시할 컬럼 (물리 모델 전용 또는 사용자 입력값) 정의 ---
 cols_to_ignore_for_ai = [
     'Step Coverage (sc, %)', 
     'Aspect Ratio (AR)'
 ]
 
-ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(columns=target_cols + cols_to_ignore_for_ai).columns.tolist()
-ALL_OUTPUT_FEATURES_ORDERED = [col for col in target_cols if col not in cols_to_ignore_for_ai]
+try:
+    # NameError가 발생했던 부분의 변수를 명확히 정의 후 사용
+    ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(
+        columns=target_cols + cols_to_ignore_for_ai
+    ).columns.tolist()
+    ALL_OUTPUT_FEATURES_ORDERED = [col for col in target_cols if col not in cols_to_ignore_for_ai]
 
+except KeyError:
+    print("\n[치명적 오류] target_cols 또는 cols_to_ignore_for_ai에 CSV에 없는 컬럼명이 포함되어 있습니다.")
+    sys.exit(1)
+
+# 데이터 분할 및 Imputation/Scaling
 X = df_encoded[ALL_INPUT_FEATURES_ORDERED].values
 Y = df_encoded[ALL_OUTPUT_FEATURES_ORDERED].values
 X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
 
-# KNN Imputation (결측값 대체)
 X_imputer = KNNImputer(n_neighbors=5)
 X_train = X_imputer.fit_transform(X_train)
 X_test = X_imputer.transform(X_test)
@@ -71,16 +87,15 @@ Y_imputer = KNNImputer(n_neighbors=5)
 Y_train = Y_imputer.fit_transform(Y_train)
 Y_test = Y_imputer.transform(Y_test)
 
-# 데이터 스케일링
 X_scaler = StandardScaler()
 Y_scaler = StandardScaler()
-X_train_scaled = X_scaler.fit_transform(X_train)
+
+X_train_scaled = X_scaler.fit_transform(X_train) 
 X_test_scaled = X_scaler.transform(X_test)
 Y_train_scaled = Y_scaler.fit_transform(Y_train)
 
 INPUT_SIZE = X_train_scaled.shape[1] 
 OUTPUT_SIZE = Y_train.shape[1] 
-print(f"AI 모델 입력 피처 수: {INPUT_SIZE}")
 
 # --- 2. AI 모델 클래스 정의 및 학습 실행 ---
 class ALDRegressor_Optimized(nn.Module):
@@ -90,7 +105,7 @@ class ALDRegressor_Optimized(nn.Module):
         self.layer_stack = nn.Sequential(
             nn.Linear(input_size, 128), nn.ReLU(), nn.Dropout(dropout_rate),
             nn.Linear(128, 64), nn.ReLU(), nn.Dropout(dropout_rate),
-            nn.Linear(64, output_size) 
+            nn.Linear(64, output_size)
         )
     def forward(self, x):
         return self.layer_stack(x)
@@ -106,7 +121,6 @@ Y_train_tensor = torch.from_numpy(Y_train_scaled).float()
 X_test_tensor = torch.from_numpy(X_test_scaled).float()
 Y_test_tensor = torch.from_numpy(Y_test_scaled).float()
 
-# 조기 종료를 위한 데이터 분할
 from sklearn.model_selection import train_test_split as split_data
 X_train_final, X_val, Y_train_final, Y_val = split_data(X_train_tensor, Y_train_tensor, test_size=VALIDATION_SPLIT, random_state=42)
 
@@ -145,7 +159,12 @@ for epoch in range(final_epochs):
 final_model.load_state_dict(torch.load(BEST_MODEL_PATH)); final_model.eval()
 print(f"\n✅ 모델 학습 완료. 최고 성능 모델 로드 완료.")
 
-# --- 3. 물리 변수 및 최적화 함수 정의 ---
+with torch.no_grad():
+    test_loss = criterion(final_model(X_test_tensor), Y_test_tensor)
+print(f"--- 🚀 최종 모델 테스트셋 MSE (8개 물성): {test_loss.item():.6f} ---")
+
+
+# --- 3. 물리 변수 계산 함수 정의 ---
 def calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     d_precursor_m = const["diameter_m"]
@@ -158,7 +177,8 @@ def calculate_full_sc_model(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     c = const["sticking_c"]; q = const["max_sites_q"]; M_A_kg = const["mass_g_mol"] / 1000.0 / N_A
     T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322; L_m = AR_value * CD_m
-    v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_A_kg)); D_Kn = 0.5 * v_avg * CD_m 
+    v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_A_kg))
+    D_Kn = 0.5 * v_avg * CD_m 
     D_A = (k_B * T_K) / (np.sqrt(2) * np.pi * const["diameter_m"]**2 * P_Pa) 
     D_eff = 1 / ((1 / D_A) + (1 / D_Kn))
     Q = 1 / np.sqrt(2 * np.pi * M_A_kg * k_B * T_K)
@@ -222,8 +242,10 @@ def objective_function(x: np.ndarray, user_input: Dict[str, Any], co_reactant_na
 # --- 4. 레시피 제안 및 검증 함수 (실제 최적화 수행) ---
 def get_user_target_input_simplified():
     available_precursors = {1: "TMA", 2: "TDMAH", 3: "TEMAHf", 4: "Zr(NEt2)4"}
+    
     print("\n--- 🌟 3단계: AI 기반 ALD 레시피 제안 시스템 시작 ---")
     print("\n[사용 가능한 전구체 선택]"); [print(f"{key}: {name}") for key, name in available_precursors.items()]
+    
     try:
         choice = int(input("1. 사용할 전구체의 번호를 입력해 주세요 (예: 1): "))
         selected_precursor_name = available_precursors[choice]
@@ -231,6 +253,7 @@ def get_user_target_input_simplified():
         target_ar = float(input("3. 목표 종횡비 (Aspect Ratio, AR)를 입력해 주세요 (예: 10.0): "))
         critical_dimension_nm = float(input("4. 채널 폭 (Critical Dimension, CD, nm)을 입력해 주세요 (예: 100): "))
     except Exception as e: print(f"\n[오류] 입력 오류: {e}. 프로그램을 종료합니다."); sys.exit(1)
+        
     return {"Precursor": selected_precursor_name, "Thickness (nm)": thickness, "Target AR": target_ar, "CD (nm)": critical_dimension_nm}
 
 def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
@@ -275,10 +298,11 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     
     return optimal_recipe_report, predicted_results, validation_data, optimization_stats
 
-# --- 5. 시스템 실행 및 출력 ---
+# --- 5. 시스템 실행 ---
 user_target_input = get_user_target_input_simplified()
 optimal_recipe, predicted_results, validation_data, optimization_stats = generate_optimal_recipe_from_model(user_target_input)
 
+# --- 6. 최종 결과 출력 ---
 print("\n\n=======================================================")
 print("  ✨ AI 기반 ALD 공정 최적화 최종 결과 보고서 ✨")
 print("=======================================================")
@@ -288,7 +312,7 @@ print(f"[구조적 조건: AR={user_target_input['Target AR']}, CD={user_target_
 print("\n[AI 제안 최적 공정 레시피 (SLSQP 탐색 결과)]")
 print(pd.Series(optimal_recipe).to_markdown(numalign="left", stralign="left"))
 
-print("\n[AI 예측 결과: 최적 레시피 적용 시 박막 특성 (8가지)]")
+print("\n[예상 결과: 최적 레시피 적용 시 박막 특성 (8가지)]")
 print(predicted_results.to_markdown(numalign="left", stralign="left"))
 
 print("\n-------------------------------------------------------")
@@ -299,6 +323,7 @@ print(f"\n물리 모델 SC: {validation_data['SC (Full Model)']} (최적화 제�
 
 print("\n📈 [최적화(SLSQP) 수렴 리포트]")
 print(pd.Series(optimization_stats).to_markdown(numalign="left", stralign="left"))
+print(f"최적화 목표 오차 (Cost): {optimization_stats['Final Cost (fun)']} (Thickness, GPC, Roughness 기준)")
 print("=======================================================")
 
 # 임시 모델 파일 삭제
