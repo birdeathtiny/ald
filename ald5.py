@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Tuple
 from scipy.optimize import minimize
 
 # --- 0. 물리/화학 상수 테이블 정의 ---
-# (제공해주신 내용과 동일)
+# (이전과 동일)
 N_A = 6.022e23
 k_B = 1.38e-23
 
@@ -32,7 +32,7 @@ COST_WEIGHTS = {
 
 # --- 2. AI 모델 클래스 정의 ---
 class ALDRegressor_Optimized(nn.Module):
-    # (제공해주신 내용과 동일)
+    # (이전과 동일)
     def __init__(self, input_size, output_size, dropout_rate):
         super(ALDRegressor_Optimized, self).__init__()
         self.output_size = output_size
@@ -56,7 +56,7 @@ class ALDOptimizer:
     def __init__(self, file_path: str):
         print("--- 1단계: ALD 최적화 시스템 초기화 시작 ---")
         
-        # 하이퍼파라미터 설정
+        # (하이퍼파라미터 설정 등 이전과 동일)
         self.final_learning_rate = 0.00195
         self.final_dropout_rate = 0.28
         self.final_batch_size = 16
@@ -68,27 +68,25 @@ class ALDOptimizer:
         
         self.DEFAULT_GPC_GUESS_A = 1.0 
 
-        # 클래스 속성 초기화
         self.X_scaler = StandardScaler()
         self.Y_scaler = StandardScaler()
         self.final_model = None
         self.ALL_INPUT_FEATURES_ORDERED = []
         self.ALL_OUTPUT_FEATURES_ORDERED = []
         
-        # 데이터 로드, 전처리, 모델 학습 자동 실행
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
         self._train_model()
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         """데이터를 로드하고 전처리합니다."""
+        # (이전과 동일)
         try:
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
             print(f"\n[치명적 오류] 파일 로드 실패: {e}. 프로그램을 종료합니다.")
             raise(e) 
 
-        # (데이터 전처리 로직은 이전과 동일)
         df.replace('-', np.nan, inplace=True)
         cols_to_convert = [
             'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
@@ -113,6 +111,7 @@ class ALDOptimizer:
     def _prepare_datasets(self, df_encoded: pd.DataFrame):
         """AI 모델의 입/출력 정의 및 데이터셋을 준비합니다."""
         
+        # (이전과 동일)
         target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)',
@@ -147,8 +146,8 @@ class ALDOptimizer:
 
     def _train_model(self):
         """AI 모델을 학습시키고 self.final_model에 저장합니다."""
+        # (이전과 동일)
         print(f"\n--- 2단계: AI 모델 학습 시작 (최대 {self.final_epochs} 에포크, 조기 종료 적용) ---")
-        # (Streamlit에서는 이 print문이 터미널에 표시됩니다)
         
         X_train_tensor = torch.from_numpy(self.X_train_scaled).float()
         Y_train_tensor = torch.from_numpy(self.Y_train_scaled).float()
@@ -237,7 +236,6 @@ class ALDOptimizer:
         co_reactant_name: str,
         purge_gas_name: str
     ) -> pd.DataFrame:
-        """레시피 딕셔너리를 AI 모델 입력용 DataFrame으로 변환합니다."""
         # (이전과 동일)
         input_df = pd.DataFrame(columns=self.ALL_INPUT_FEATURES_ORDERED); input_df.loc[0] = 0.0
         for key, value in recipe_params.items():
@@ -257,7 +255,6 @@ class ALDOptimizer:
         co_reactant_name: str,
         purge_gas_name: str
     ) -> pd.Series:
-        """하나의 레시피로 AI 예측을 수행하고 9개 결과를 반환합니다."""
         # (이전과 동일)
         input_df = self._create_model_input(recipe_params, precursor_name, co_reactant_name, purge_gas_name)
         X_scaled = self.X_scaler.transform(input_df.values); X_tensor = torch.from_numpy(X_scaled).float()
@@ -280,8 +277,7 @@ class ALDOptimizer:
         cost_weights: Dict[str, float],
         fixed_cycles_n: int 
     ) -> float:
-        """물리 모델 기반 SC 제약조건 함수 (SLSQP용)"""
-        
+        # (이전과 동일)
         target_ar = user_input["Target AR"]
         if target_ar <= 5: TARGET_SC_MIN = 98.0
         elif target_ar <= 15: TARGET_SC_MIN = 90.0
@@ -308,20 +304,17 @@ class ALDOptimizer:
         cost_weights: Dict[str, float],
         fixed_cycles_n: int 
     ) -> float:
-        """AI 예측 기반 비용 함수 (SLSQP용) - GPC와 거칠기 최소화가 목표"""
-        
-        # 1. 최적화 변수(x, 5개)를 레시피(dict)로 매핑
+        # (이전과 동일)
         recipe_params = {
             "Temperature (c)": x[0],
             "Pressure (torr)": x[1],
             "Precursor_Pulse Time (s)": x[2],
             "Purge Time (s)": x[3],
             "Purge Gas Flow Rate (cm3/min)": x[4],
-            "Cycles (n)": fixed_cycles_n, # 💡 고정된 사이클 값 사용
+            "Cycles (n)": fixed_cycles_n,
             "Co-reactant_Pulse Time (s)": x[2]
         }
         
-        # 2. 레시피로 AI 예측 수행
         try:
             predicted_results = self._predict_from_recipe(
                 recipe_params, user_input["Precursor"], co_reactant_name, purge_gas_name
@@ -329,11 +322,9 @@ class ALDOptimizer:
         except Exception as e:
             return 1e9 
             
-        # 3. 목표값 정의 (GPC)
         target_thickness = user_input["Thickness (nm)"]
         target_gpc_ideal = (target_thickness * 10) / (fixed_cycles_n + 1e-6)
         
-        # 4. 오차 (Cost) 계산
         w_gpc = cost_weights.get("gpc", 1.0)
         w_roughness = cost_weights.get("roughness", 1.0)
 
@@ -383,15 +374,13 @@ class ALDOptimizer:
         ]
         
         # 2. '무작위' 초기 추측값 (Initial Guess) 생성
-        # (np.random.uniform을 사용하여 각 경계 내에서 랜덤 값 추출)
         initial_guess = [
             np.random.uniform(low, high) for low, high in bounds
         ]
         
         # 3. 콘솔에 랜덤 시작점 출력 (터미널/백엔드 로그에 표시됨)
         print(f"\n--- 🔍 '무작위' 탐색 시작점(Initial Guess)을 설정합니다. ---")
-        print(f"    {np.round(initial_guess, 3)}") # 소수점 3자리까지 반올림하여 표시
-
+        print(f"    {np.round(initial_guess, 3)}")
         
         args = (user_input, co_reactant, purge_gas, COST_WEIGHTS, initial_cycles_n)
         
@@ -431,17 +420,18 @@ class ALDOptimizer:
             "Co-reactant_Pulse Time (s)": optimal_x_5_vars[2]
         }
         
+        # (GPC 확인을 위한 예측)
         predicted_results_gpc_check = self._predict_from_recipe(
             recipe_params_for_gpc_check, precursor, co_reactant, purge_gas
         )
         
+        # (최종 GPC 및 Cycles 계산)
         final_gpc_A = predicted_results_gpc_check.get('GPC (A/cycle)', self.DEFAULT_GPC_GUESS_A)
         if final_gpc_A <= 0: final_gpc_A = self.DEFAULT_GPC_GUESS_A
             
         final_optimal_cycles_n = int(round((target_thickness * 10) / final_gpc_A))
         final_optimal_cycles_n = max(10, final_optimal_cycles_n)
 
-        # (이 print문들은 터미널에 출력됩니다)
         print(f"\n--- 💡 GPC 기반 Cycles 재계산 ---")
         print(f"  - AI 예측 최적 GPC: {final_gpc_A:.4f} A/cycle")
         print(f"  - 목표 두께 {target_thickness} nm 달성을 위한 최종 Cycles: {final_optimal_cycles_n} (n)")
@@ -472,6 +462,7 @@ class ALDOptimizer:
             "Cycles (n)": final_optimal_cycles_n, 
             "Co-reactant_Pulse Time (s)": Pulse_Time
         }
+        # (최종 리포트를 위한 AI 예측)
         predicted_results_for_report = self._predict_from_recipe(
             final_recipe_params_for_report, precursor, co_reactant, purge_gas
         )
@@ -490,6 +481,12 @@ class ALDOptimizer:
             "Final Cost (fun)": f"{result.fun:.6f}"
         }
         
+        # 💡 [핵심 버그 수정]
+        # AI가 예측한 'Thickness (nm)'를 무시하고, 우리가 최적화한 GPC와 Cycles로 '두께'를 역으로 계산하여 덮어씁니다.
+        final_calculated_thickness_nm = (final_gpc_A * final_optimal_cycles_n) / 10.0
+        predicted_results_for_report['Thickness (nm)'] = final_calculated_thickness_nm
+        print(f"  - 최종 두께 보정: {final_calculated_thickness_nm:.4f} nm (GPC와 Cycles 기반으로 역산)")
+        
         return optimal_recipe_report, predicted_results_for_report, validation_data, optimization_stats
 
 
@@ -499,8 +496,8 @@ class ALDOptimizer:
 def initialize_optimizer(file_path):
     """
     ALDOptimizer 객체를 초기화하고 Streamlit 캐시에 저장합니다.
-    이 함수는 모델 학습을 포함하며, 앱 실행 시 한 번만 실행됩니다.
     """
+    # (이전과 동일)
     try:
         optimizer = ALDOptimizer(file_path=file_path)
         return optimizer
@@ -509,7 +506,7 @@ def initialize_optimizer(file_path):
         st.stop()
     except Exception as e:
         st.error(f"[초기화 오류] 모델 로딩 중 문제가 발생했습니다: {e}")
-        st.exception(e) # 자세한 오류 로그 표시
+        st.exception(e) 
         st.stop()
 
 
@@ -556,7 +553,6 @@ def main_app():
         help="예: 100"
     )
 
-    # 입력값을 딕셔너리로 묶기
     user_target_input = {
         "Precursor": selected_precursor_name,
         "Thickness (nm)": thickness,
@@ -571,7 +567,6 @@ def main_app():
     # --- 3. 최적화 실행 버튼 ---
     if st.button("🚀 최적 레시피 생성하기", type="primary"):
         
-        # 스피너(로딩 표시)와 함께 최적화 함수 실행
         with st.spinner("--- ⏳ 최적의 ALD 공정 조건을 탐색 중입니다. (SLSQP, 무작위 시작점) ---"):
             try:
                 # 3. 최적화 실행 (결과 4개를 반환받음)
@@ -596,6 +591,7 @@ def main_app():
 
                 with col2:
                     st.subheader("📈 AI 예측 박막 특성 (9가지)")
+                    # 💡 수정된 두께 값이 여기에 표시됩니다.
                     st.dataframe(predicted_results.to_frame(name='Predicted Value'))
                     
                     st.subheader("📊 최적화(SLSQP) 수렴 리포트")
@@ -605,7 +601,7 @@ def main_app():
                 st.markdown("---")
                 st.subheader("🔍 핵심 결과 요약")
                 
-                # 두께 검증
+                # 두께 검증 (이제 거의 일치해야 함)
                 pred_thickness = predicted_results.get('Thickness (nm)', 0)
                 st.metric(
                     label=f"두께 검증 (목표: {user_target_input['Thickness (nm)']} nm)",
@@ -624,7 +620,7 @@ def main_app():
 
             except Exception as e:
                 st.error(f"최적화 실행 중 오류가 발생했습니다: {e}")
-                st.exception(e) # 자세한 오류 로그 표시
+                st.exception(e) 
 
     else:
         st.info("왼쪽 사이드바에서 목표 조건을 입력하고 '최적 레시피 생성하기' 버튼을 눌러주세요.")
