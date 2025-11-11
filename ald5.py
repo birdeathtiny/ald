@@ -41,9 +41,9 @@ class ALDRegressor_Optimized(nn.Module):
         return self.layer_stack(x)
 
 # -----------------------------------------------------------------
-# ✨ [핵심 로직] 학습 또는 로드를 수행하는 캐시 함수
+# ✨ [핵심 로직] 학습 또는 로드를 수행하는 캐시 함수 (디버깅 코드 추가됨)
 # -----------------------------------------------------------------
-@st.cache_resource # 👈 이 앱 세션에서 딱 한 번만 실행됨
+@st.cache_resource 
 def load_or_train_model():
     """
     앱이 시작될 때 모델과 자산을 로드합니다.
@@ -59,8 +59,7 @@ def load_or_train_model():
         assets_data = joblib.load(ASSETS_PATH)
         
         try:
-            # (AI가 SC를 예측하도록 target_cols가 수정된 상태)
-            target_cols_count = len(assets_data["ALL_OUTPUT_FEATURES_ORDERED"]) # 9
+            target_cols_count = len(assets_data["ALL_OUTPUT_FEATURES_ORDERED"]) 
             model = ALDRegressor_Optimized(
                 input_size=len(assets_data["ALL_INPUT_FEATURES_ORDERED"]),
                 output_size=target_cols_count, 
@@ -115,7 +114,7 @@ def load_or_train_model():
         'Density (g/cm3)', 'GPC (A/cycle)',
         'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)',
         'Breakdown Field (MV/cm)',
-        'Step Coverage (sc, %)'  # 👈 AI 예측 대상에 SC 포함 (총 9개)
+        'Step Coverage (sc, %)'
     ]
     cols_to_ignore_for_ai = [
         'Aspect Ratio (AR)'
@@ -140,16 +139,29 @@ def load_or_train_model():
     Y_imputer = KNNImputer(n_neighbors=5)
     Y_train = Y_imputer.fit_transform(Y_train)
     Y_test = Y_imputer.transform(Y_test)
-    X_scaler = StandardScaler()
+
+    # 💡 [디버깅 코드 추가] 
+    # 데이터셋 크기를 화면에 직접 출력합니다.
+    st.error(f"--- [디버깅] 데이터셋 X 크기: {X_train.shape} ---")
+    st.error(f"--- [디버깅] 데이터셋 Y 크기: {Y_train.shape} ---")
+    
+    X_scaler = StandardScaler() # (디버깅 후 스케일러 정의)
     Y_scaler = StandardScaler()
+
+    INPUT_SIZE = X_train.shape[1]
+    OUTPUT_SIZE = Y_train.shape[1] 
+
+    # (데이터가 0개이면, 여기서 에러가 나거나 0으로 설정됨)
+    if INPUT_SIZE == 0 or OUTPUT_SIZE == 0 or X_train.shape[0] == 0:
+        st.error("--- [치명적 오류] 학습할 데이터(X 또는 Y)가 0개입니다. CSV 파일 또는 전처리 로직을 확인하세요. ---")
+        st.stop() # (데이터가 0개면 여기서 앱을 중지)
+    
     X_train_scaled = X_scaler.fit_transform(X_train)
     X_test_scaled = X_scaler.transform(X_test)
     Y_train_scaled = Y_scaler.fit_transform(Y_train)
     Y_test_scaled = Y_scaler.transform(Y_test)
-    INPUT_SIZE = X_train_scaled.shape[1]
-    OUTPUT_SIZE = Y_train.shape[1] # 👈 9
 
-    # (모델 학습 - 이전과 동일)
+    # (모델 학습 - 이하 동일)
     final_learning_rate = 0.00195
     final_dropout_rate = 0.28
     final_batch_size = 16
@@ -159,6 +171,7 @@ def load_or_train_model():
     WEIGHT_DECAY = 1e-5
     st.info(f"--- 2단계: AI 모델 학습 시작 (최대 {final_epochs} 에포크) ---")
     st.info(f"AI 모델 출력 피처 수: {OUTPUT_SIZE} (SC 포함)")
+    
     X_train_tensor = torch.from_numpy(X_train_scaled).float()
     Y_train_tensor = torch.from_numpy(Y_train_scaled).float()
     X_test_tensor = torch.from_numpy(X_test_scaled).float()
@@ -166,10 +179,17 @@ def load_or_train_model():
     X_train_final, X_val, Y_train_final, Y_val = train_test_split(
         X_train_tensor, Y_train_tensor, test_size=VALIDATION_SPLIT, random_state=42
     )
+    
+    # (데이터셋이 비어있는지 다시 한번 확인)
+    if len(X_train_final) == 0:
+        st.error("--- [치명적 오류] Validation split 후 학습 데이터가 0개입니다. ---")
+        st.stop()
+        
     train_dataset = TensorDataset(X_train_final, Y_train_final)
     val_dataset = TensorDataset(X_val, Y_val)
     train_loader = DataLoader(train_dataset, batch_size=final_batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=final_batch_size, shuffle=False)
+    
     final_model = ALDRegressor_Optimized(INPUT_SIZE, OUTPUT_SIZE, final_dropout_rate)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(
@@ -180,14 +200,22 @@ def load_or_train_model():
     best_val_loss = float('inf')
     patience_counter = 0
     progress_bar = st.progress(0, "학습 진행 중...")
+    
     for epoch in range(final_epochs):
         final_model.train()
+        
+        # (train_loader가 비어있는지 확인)
+        if len(train_loader) == 0:
+            st.error("--- [치명적 오류] Train Dataloader가 비어있습니다. (학습 중단) ---")
+            break
+            
         for inputs, targets in train_loader:
             optimizer.zero_grad()
             outputs = final_model(inputs)
             loss = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
+            
         final_model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -195,23 +223,29 @@ def load_or_train_model():
                 outputs = final_model(inputs)
                 loss = criterion(outputs, targets)
                 val_loss += loss.item()
-        val_loss /= len(val_loader)
+        
+        if len(val_loader) > 0:
+            val_loss /= len(val_loader)
+        
         progress_bar.progress((epoch + 1) / final_epochs, f"Epoch [{epoch+1}/{final_epochs}], Val Loss: {val_loss:.4f}")
+        
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(final_model.state_dict(), MODEL_PATH) 
             patience_counter = 0
         else:
             patience_counter += 1
+            
         if patience_counter >= PATIENCE:
             st.info(f"[조기 종료] Epoch {epoch+1}에서 학습을 중단합니다.")
             break
+            
     progress_bar.empty()
     st.success(f"✅ 모델 학습 완료. '{MODEL_PATH}'에 저장되었습니다.")
     final_model.load_state_dict(torch.load(MODEL_PATH))
     final_model.eval()
     assets_data = {
-        "model": final_model,
+        "model": "model",
         "X_scaler": X_scaler,
         "Y_scaler": Y_scaler,
         "ALL_INPUT_FEATURES_ORDERED": ALL_INPUT_FEATURES_ORDERED,
@@ -219,6 +253,7 @@ def load_or_train_model():
     }
     joblib.dump({k: v for k, v in assets_data.items() if k != 'model'}, ASSETS_PATH)
     st.success(f"✅ 전처리기(Scaler) 및 자산을 '{ASSETS_PATH}'에 저장했습니다.")
+    assets_data["model"] = final_model # (반환값에는 모델 객체 포함)
     return assets_data
 # -----------------------------------------------------------------
 # [앱 시작]
@@ -345,13 +380,13 @@ def constraint_step_coverage(
     
     target_ar = user_input["Target AR"]
     
-    # (SC 목표치 완화 - 이전과 동일)
+    # 💡 [SC 제약 완화됨] 
     if target_ar <= 5:
-        TARGET_SC_MIN = 90.0
+        TARGET_SC_MIN = 80.0  # (기존 90.0)
     elif target_ar <= 15:
-        TARGET_SC_MIN = 80.0
+        TARGET_SC_MIN = 60.0  # (기존 80.0)
     else:
-        TARGET_SC_MIN = 70.0
+        TARGET_SC_MIN = 40.0  # (기존 70.0)
     
     T_celsius = x[0]; P_torr = x[1]; Pulse_Time_s = x[2]
     
@@ -371,8 +406,8 @@ def constraint_step_coverage(
 # --- 6. 최적화를 위한 '목적 함수 (Objective Function)' ---
 # 💡 [GPC 버그 수정됨]
 COST_WEIGHTS = {
-    "thickness": 10000.0, # 👈 두께 최우선
-    "gpc": 30.0,         # (사용 안 함)
+    "thickness": 100.0, # 👈 100.0으로 복구
+    "gpc": 30.0,        # (사용 안 함)
     "roughness": 10.0
 }
 
@@ -447,7 +482,7 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     
     constraints = ({
         'type': 'ineq',
-        'fun': constraint_step_coverage, 
+        'fun': constraint_step_coverage, # 👈 완화된 SC 제약 
         'args': args
     })
     
@@ -498,7 +533,7 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     validation_data = {
         "Mean Free Path (λ) [m]": f"{lambda_m:.2e}", "Knudsen Number (Kn)": f"{Kn:.2f}",
         "Sticking Coeff. (c) 사용 ": f"{PRECURSOR_CONSTANTS.get(precursor, PRECURSOR_CONSTANTS['TMA'])['sticking_c']:.3e}",
-        "SC (Full Model)": f"{SC_full_model_value:.4f} %", # 👈 '물리 모델' SC (새 공식)
+        "SC (Full Model)": f"{SC_full_model_value:.4f} %", 
     }
     optimization_stats = {
         "Optimization Success": result.success, "Optimization Message": result.message,
