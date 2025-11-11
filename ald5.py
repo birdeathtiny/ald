@@ -298,6 +298,7 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     return optimal_recipe_report, predicted_results, validation_data, optimization_stats
 
 # --- 5. 시스템 실행 ---
+# (이 부분은 Streamlit 환경에서 실행되는 것이 아닌, 일반 Python 실행 환경을 가정합니다.)
 user_target_input = get_user_target_input_simplified()
 optimal_recipe, predicted_results, validation_data, optimization_stats = generate_optimal_recipe_from_model(user_input)
 

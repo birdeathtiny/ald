@@ -1,7 +1,6 @@
-pandas
 numpy
+pandas
+scikit-learn
 torch
 scipy
-scikit-learn
-joblib
-streamlit
+gradio
