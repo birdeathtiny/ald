@@ -64,7 +64,6 @@ cols_to_ignore_for_ai = [
 ]
 
 try:
-    # NameError 해결: 변수를 명확히 정의 후 drop
     cols_to_drop_final = target_cols + cols_to_ignore_for_ai
     ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(
         columns=cols_to_drop_final
@@ -93,7 +92,7 @@ Y_scaler = StandardScaler()
 X_train_scaled = X_scaler.fit_transform(X_train) 
 X_test_scaled = X_scaler.transform(X_test)
 Y_train_scaled = Y_scaler.fit_transform(Y_train)
-Y_test_scaled = Y_scaler.transform(Y_test) # Y_test_scaled 정의
+Y_test_scaled = Y_scaler.transform(Y_test) 
 
 INPUT_SIZE = X_train_scaled.shape[1] 
 OUTPUT_SIZE = Y_train.shape[1] 
@@ -300,7 +299,7 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
 
 # --- 5. 시스템 실행 ---
 user_target_input = get_user_target_input_simplified()
-optimal_recipe, predicted_results, validation_data, optimization_stats = generate_optimal_recipe_from_model(user_target_input)
+optimal_recipe, predicted_results, validation_data, optimization_stats = generate_optimal_recipe_from_model(user_input)
 
 # --- 6. 최종 결과 출력 ---
 print("\n\n=======================================================")
