@@ -51,7 +51,6 @@ class ALDRegressor_Optimized(nn.Module):
 # --- 3. ALD 최적화 메인 클래스 ---
 class ALDOptimizer:
     
-    # (제공해주신 클래스 내용 전체를 여기에 그대로 붙여넣습니다)
     # --- 1. 초기화 및 모델 학습 ---
     
     def __init__(self, file_path: str):
@@ -87,9 +86,7 @@ class ALDOptimizer:
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
             print(f"\n[치명적 오류] 파일 로드 실패: {e}. 프로그램을 종료합니다.")
-            # Streamlit 환경에서는 sys.exit() 대신 st.error()와 st.stop()을 사용합니다.
-            # (이 클래스는 Streamlit 외부에서 호출될 것이므로 일단 유지)
-            raise(e) # 오류를 발생시켜 상위 호출자(Streamlit)가 처리하도록 함
+            raise(e) 
 
         # (데이터 전처리 로직은 이전과 동일)
         df.replace('-', np.nan, inplace=True)
@@ -151,8 +148,8 @@ class ALDOptimizer:
     def _train_model(self):
         """AI 모델을 학습시키고 self.final_model에 저장합니다."""
         print(f"\n--- 2단계: AI 모델 학습 시작 (최대 {self.final_epochs} 에포크, 조기 종료 적용) ---")
-        print(f"AI가 예측할 물성 (총 {self.OUTPUT_SIZE}개): {self.ALL_OUTPUT_FEATURES_ORDERED}")
-
+        # (Streamlit에서는 이 print문이 터미널에 표시됩니다)
+        
         X_train_tensor = torch.from_numpy(self.X_train_scaled).float()
         Y_train_tensor = torch.from_numpy(self.Y_train_scaled).float()
         X_test_tensor = torch.from_numpy(self.X_test_scaled).float()
@@ -367,15 +364,16 @@ class ALDOptimizer:
         target_ar = user_input["Target AR"]
         CD_m = user_input["CD (nm)"] * 1e-9
         
-        # 💡 Streamlit에서는 print 대신 UI로 피드백을 줍니다.
-        # print("\n--- ⏳ 최적의 ALD 공정 조건을 탐색 중입니다. (SLSQP, 5개 변수, GPC/Roughness 타겟) ---")
-        
         co_reactant = 'H2O' if precursor in ['TMA', 'TDMAH'] else 'O3'
         purge_gas = "N2"
         
         initial_cycles_n = int(round((target_thickness * 10) / self.DEFAULT_GPC_GUESS_A))
         initial_cycles_n = max(10, initial_cycles_n) # 최소 10 사이클 보장
         
+        
+        # 💡 [핵심 수정] '정해진' 초기값을 사용하지 않고 '무작위' 초기값을 생성합니다.
+        
+        # 1. 변수 경계 (Bounds) - 5개 변수
         bounds = [
             (150, 400),     # Temperature (c)
             (0.01, 1.0),    # Pressure (torr)
@@ -383,9 +381,17 @@ class ALDOptimizer:
             (1.0, 10.0),    # Purge Time (s)
             (50, 500),      # Purge Gas Flow Rate (cm3/min)
         ]
+        
+        # 2. '무작위' 초기 추측값 (Initial Guess) 생성
+        # (np.random.uniform을 사용하여 각 경계 내에서 랜덤 값 추출)
         initial_guess = [
-            300, 0.5, 0.1, 5.0, 300
+            np.random.uniform(low, high) for low, high in bounds
         ]
+        
+        # 3. 콘솔에 랜덤 시작점 출력 (터미널/백엔드 로그에 표시됨)
+        print(f"\n--- 🔍 '무작위' 탐색 시작점(Initial Guess)을 설정합니다. ---")
+        print(f"    {np.round(initial_guess, 3)}") # 소수점 3자리까지 반올림하여 표시
+
         
         args = (user_input, co_reactant, purge_gas, COST_WEIGHTS, initial_cycles_n)
         
@@ -395,15 +401,18 @@ class ALDOptimizer:
             'args': args
         })
         
+        # 💡 2단계: 5개 변수에 대해 SLSQP 최적화 실행
         result = minimize(
             self._objective_function, 
-            initial_guess,
+            initial_guess,  # 💡 [무작위 값] 에서 탐색 시작
             args=args,
             method='SLSQP',
             bounds=bounds,
             constraints=constraints,
             options={'maxiter': 100, 'eps': 1e-6}
         )
+        
+        print(f"--- 🏁 탐색 완료! 최적점(result.x)을 찾았습니다. ---")
         
         if not result.success:
             print(f"\n[경고] 최적화가 수렴에 실패했습니다 (혹은 제약조건 위반): {result.message}")
@@ -481,12 +490,7 @@ class ALDOptimizer:
             "Final Cost (fun)": f"{result.fun:.6f}"
         }
         
-        # 💡 [핵심 수정] _print_report 대신 4개의 결과 객체를 반환합니다.
         return optimal_recipe_report, predicted_results_for_report, validation_data, optimization_stats
-
-    # 💡 _print_report 함수는 Streamlit UI에서 직접 처리하므로 여기서는 제거하거나 주석 처리합니다.
-    # def _print_report(self, ...):
-    #     ... 
 
 
 # --- 7. Streamlit UI 및 실행 로직 ---
@@ -516,7 +520,6 @@ def main_app():
     st.title("✨ AI 기반 ALD 공정 최적화 시스템")
 
     # --- 1. Optimizer 객체 로드 (캐시 사용) ---
-    # 이 부분에서 __init__이 실행되며 모델 학습이 진행됩니다. (최초 1회)
     optimizer = initialize_optimizer(file_path="AI_ALD1.csv.csv")
     
     if optimizer is None:
@@ -569,7 +572,7 @@ def main_app():
     if st.button("🚀 최적 레시피 생성하기", type="primary"):
         
         # 스피너(로딩 표시)와 함께 최적화 함수 실행
-        with st.spinner("--- ⏳ 최적의 ALD 공정 조건을 탐색 중입니다. (SLSQP, 5개 변수, GPC/Roughness 타겟) ---"):
+        with st.spinner("--- ⏳ 최적의 ALD 공정 조건을 탐색 중입니다. (SLSQP, 무작위 시작점) ---"):
             try:
                 # 3. 최적화 실행 (결과 4개를 반환받음)
                 optimal_recipe, predicted_results, validation_data, optimization_stats = optimizer.generate_optimal_recipe(user_target_input)
@@ -608,7 +611,6 @@ def main_app():
                     label=f"두께 검증 (목표: {user_target_input['Thickness (nm)']} nm)",
                     value=f"{pred_thickness:.4f} nm",
                     delta=f"{pred_thickness - user_target_input['Thickness (nm)']:.4f} nm",
-                    # delta_color="inverse" # 오차가 0에 가까울수록 좋으므로 "inverse"
                 )
 
                 # SC 이중 검증
@@ -630,5 +632,4 @@ def main_app():
 
 # --- 8. 시스템 실행 ---
 if __name__ == "__main__":
-    # (기존 CLI 실행 코드는 main_app() 호출로 대체됨)
     main_app()
