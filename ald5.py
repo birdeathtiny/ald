@@ -64,8 +64,10 @@ cols_to_ignore_for_ai = [
 ]
 
 try:
+    # --- 💡 NameError 해결: 리스트를 먼저 합치는 대신, drop 인수를 명확히 구성 ---
+    cols_to_drop_final = target_cols + cols_to_ignore_for_ai
     ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(
-        columns=target_cols + cols_to_ignore_for_ai
+        columns=cols_to_drop_final
     ).columns.tolist()
     ALL_OUTPUT_FEATURES_ORDERED = [col for col in target_cols if col not in cols_to_ignore_for_ai]
 
@@ -91,14 +93,10 @@ Y_scaler = StandardScaler()
 X_train_scaled = X_scaler.fit_transform(X_train) 
 X_test_scaled = X_scaler.transform(X_test)
 Y_train_scaled = Y_scaler.fit_transform(Y_train)
-# 🚨 NameError 해결: Y_test_scaled 정의 추가
-Y_test_scaled = Y_scaler.transform(Y_test)
+Y_test_scaled = Y_scaler.transform(Y_test) # Y_test_scaled 정의
 
 INPUT_SIZE = X_train_scaled.shape[1] 
 OUTPUT_SIZE = Y_train.shape[1] 
-
-print(f"\n--- 1단계: 데이터 준비 완료 ---")
-print(f"AI 모델 입력 피처 수: {INPUT_SIZE}")
 
 # --- 2. AI 모델 클래스 정의 및 학습 실행 ---
 class ALDRegressor_Optimized(nn.Module):
@@ -122,7 +120,7 @@ print(f"\n--- 2단계: AI 모델 학습 시작 (최대 {final_epochs} 에포크)
 X_train_tensor = torch.from_numpy(X_train_scaled).float()
 Y_train_tensor = torch.from_numpy(Y_train_scaled).float()
 X_test_tensor = torch.from_numpy(X_test_scaled).float()
-Y_test_tensor = torch.from_numpy(Y_test_scaled).float() # 이제 이 라인에서 오류가 발생하지 않습니다.
+Y_test_tensor = torch.from_numpy(Y_test_scaled).float()
 
 from sklearn.model_selection import train_test_split as split_data
 X_train_final, X_val, Y_train_final, Y_val = split_data(X_train_tensor, Y_train_tensor, test_size=VALIDATION_SPLIT, random_state=42)
@@ -180,8 +178,7 @@ def calculate_full_sc_model(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     c = const["sticking_c"]; q = const["max_sites_q"]; M_A_kg = const["mass_g_mol"] / 1000.0 / N_A
     T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322; L_m = AR_value * CD_m
-    v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_A_kg))
-    D_Kn = 0.5 * v_avg * CD_m 
+    v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_A_kg)); D_Kn = 0.5 * v_avg * CD_m 
     D_A = (k_B * T_K) / (np.sqrt(2) * np.pi * const["diameter_m"]**2 * P_Pa) 
     D_eff = 1 / ((1 / D_A) + (1 / D_Kn))
     Q = 1 / np.sqrt(2 * np.pi * M_A_kg * k_B * T_K)
