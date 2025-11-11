@@ -43,7 +43,7 @@ class ALDRegressor_Optimized(nn.Module):
 # -----------------------------------------------------------------
 # ✨ [핵심 로직] 학습 또는 로드를 수행하는 캐시 함수
 # -----------------------------------------------------------------
-@st.cache_resource
+@st.cache_resource # 👈 이 앱 세션에서 딱 한 번만 실행됨
 def load_or_train_model():
     """
     앱이 시작될 때 모델과 자산을 로드합니다.
@@ -52,9 +52,12 @@ def load_or_train_model():
     MODEL_PATH = 'best_ald_model.pth'
     ASSETS_PATH = 'ald_assets.joblib'
 
+    # --- A. 파일이 이미 있는 경우 (학습 건너뛰기) ---
     if os.path.exists(MODEL_PATH) and os.path.exists(ASSETS_PATH):
         st.info(f"'{MODEL_PATH}'와 '{ASSETS_PATH}'에서 기존 자산을 로드합니다... (학습 건너뜀)")
+        
         assets_data = joblib.load(ASSETS_PATH)
+        
         try:
             # (AI가 SC를 예측하도록 target_cols가 수정된 상태)
             target_cols_count = len(assets_data["ALL_OUTPUT_FEATURES_ORDERED"]) # 9
@@ -65,14 +68,17 @@ def load_or_train_model():
             )
             model.load_state_dict(torch.load(MODEL_PATH))
             model.eval()
+            
             assets_data["model"] = model
             st.success("✅ 자산 로드 완료.")
             return assets_data
+        
         except Exception as e:
             st.warning(f"모델 로드 실패: {e}. 자산을 삭제하고 재학습을 시도합니다.")
             if os.path.exists(MODEL_PATH): os.remove(MODEL_PATH)
             if os.path.exists(ASSETS_PATH): os.remove(ASSETS_PATH)
 
+    # --- B. 파일이 없는 경우 (최초 1회 학습 실행) ---
     st.warning(f"'{MODEL_PATH}' 파일이 없습니다. 지금부터 모델 학습을 시작합니다...")
     st.info("이 작업은 앱 최초 실행 시 한 번만 수행되며, 수 분 정도 걸릴 수 있습니다.")
     
@@ -95,7 +101,8 @@ def load_or_train_model():
     ]
     for col in cols_to_convert:
         df[col] = pd.to_numeric(df[col], errors='coerce')
-    df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H_O (Implied)': 'H_O'})
+
+    df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
     df['Co-reactant'] = df['Co-reactant'].replace({'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
     cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)']
     df_processed = df.drop(columns=cols_to_drop_high_nan)
@@ -235,7 +242,7 @@ ALL_OUTPUT_FEATURES_ORDERED = ASSETS["ALL_OUTPUT_FEATURES_ORDERED"]
 
 # --- 3. 물리 변수 계산 함수 정의 (SC 전담) ---
 def calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
-    # (이 함수는 SC 계산에 직접 쓰이진 않지만, 결과 '검증' 창에 표시하기 위해 유지)
+    # (검증용)
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     d_precursor_m = const["diameter_m"]
     T_K = T_celsius + 273.15
@@ -245,19 +252,18 @@ def calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m
     Kn = lambda_m / L_feature_m
     return lambda_m, Kn
 
-# 💡 [수정됨] SC 계산 함수가 새 공식(Steady-State)으로 완전히 교체됨
+# 💡 [SC 공식 수정됨] 요청하신 Steady-State 공식
 def calculate_full_sc_model(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
     
-    # --- 1. 상수 및 변수 정의 (이전 모델과 동일) ---
+    # --- 1. 상수 및 변수 정의 ---
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     c = const["sticking_c"]; q = const["max_sites_q"]; d_precursor_m = const["diameter_m"]; M_A_kg = const["mass_g_mol"] / 1000.0 / N_A
-    
     T_K = T_celsius + 273.15
     P_Pa = P_torr * 133.322       # (p_A0, 압력)
     L_m = AR_value * CD_m         # (L, 트렌치 길이)
     t_pulse = Pulse_Time_s        # (t_pulse, 펄스 시간)
 
-    # --- 2. 중간 물리값 계산 (이전 모델과 동일) ---
+    # --- 2. 중간 물리값 계산 ---
     v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_A_kg))
     lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
     D_A = (1/3) * lambda_m * v_avg
@@ -265,12 +271,10 @@ def calculate_full_sc_model(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor
     D_eff = 1 / ((1 / D_A) + (1 / D_Kn))
 
     # --- 3. 새 공식에 필요한 변수 계산 ---
-    
-    # Q (기체 상수 관련 텀, 이전 모델에서 가져옴)
+    # Q (기체 상수 관련 텀)
     Q = 1 / np.sqrt(2 * np.pi * M_A_kg * k_B * T_K) 
     
     # x_s (특성 확산 길이, lambda_D로 가정)
-    # (이전 모델의 lambda_D = np.sqrt(D_eff * Pulse_Time_s)와 동일)
     x_s = np.sqrt(D_eff * t_pulse)
     
     # --- 4. 새 SC 공식 (Steady-State) 적용 ---
@@ -326,7 +330,7 @@ def predict_from_recipe(
     with torch.no_grad():
         Y_pred_scaled_tensor = final_model(X_tensor)
     Y_pred_unscaled = Y_scaler.inverse_transform(Y_pred_scaled_tensor.numpy())[0]
-    # (이제 9개 항목의 Series가 반환됨)
+    # (9개 항목 반환)
     predicted_results = pd.Series(Y_pred_unscaled, index=ALL_OUTPUT_FEATURES_ORDERED).round(4)
     return predicted_results
 
@@ -351,7 +355,7 @@ def constraint_step_coverage(
     
     T_celsius = x[0]; P_torr = x[1]; Pulse_Time_s = x[2]
     
-    # 👈 제약조건은 새로 수정된 '물리 모델' SC 함수를 호출함
+    # (새로운 물리 모델 공식으로 SC 계산)
     phys_sc = calculate_full_sc_model(
         P_torr=P_torr,
         T_celsius=T_celsius,
@@ -365,12 +369,13 @@ def constraint_step_coverage(
 
 
 # --- 6. 최적화를 위한 '목적 함수 (Objective Function)' ---
+# 💡 [GPC 버그 수정됨]
 COST_WEIGHTS = {
-    "thickness": 10000.0,
-    "gpc": 30.0,
+    "thickness": 100.0, # 👈 두께 최우선
+    "gpc": 30.0,         # (사용 안 함)
     "roughness": 10.0
 }
-# (목적 함수는 SC를 직접 최적화하지 않으므로 수정 불필요)
+
 def objective_function(
     x: np.ndarray,
     user_input: Dict[str, Any],
@@ -378,12 +383,14 @@ def objective_function(
     purge_gas_name: str,
     cost_weights: Dict[str, float]
 ) -> float:
+    
     recipe_params = {
         "Temperature (c)": x[0], "Pressure (torr)": x[1],
         "Precursor_Pulse Time (s)": x[2], "Purge Time (s)": x[3],
         "Purge Gas Flow Rate (cm3/min)": x[4], "Cycles (n)": x[5],
         "Co-reactant_Pulse Time (s)": x[2]
     }
+    
     try:
         predicted_results = predict_from_recipe(
             recipe_params, user_input["Precursor"],
@@ -391,23 +398,26 @@ def objective_function(
         )
     except Exception as e:
         return 1e9
+        
+    # 3. 목표값 정의
     target_thickness = user_input["Thickness (nm)"]
-    target_gpc_ideal = (target_thickness * 10) / (x[5] + 1e-6)
-    w_thickness = cost_weights.get("thickness", 1.0)
-    w_gpc = cost_weights.get("gpc", 1.0)
-    w_roughness = cost_weights.get("roughness", 1.0)
-    pred_thickness = predicted_results.get('Thickness (nm)', target_thickness)
-    pred_gpc = predicted_results.get('GPC (A/cycle)', 0)
-    pred_roughness = predicted_results.get('Surface Roughness (RMS, nm)', 10)
     
+    # 4. 오차 (Cost) 계산
+    w_thickness = cost_weights.get("thickness", 1.0)
+    w_roughness = cost_weights.get("roughness", 1.0)
+
+    pred_thickness = predicted_results.get('Thickness (nm)', target_thickness)
+    pred_roughness = predicted_results.get('Surface Roughness (RMS, nm)', 10)
+
     cost_thickness = ((pred_thickness - target_thickness) / target_thickness)**2
-    cost_gpc = ((pred_gpc - target_gpc_ideal) / target_gpc_ideal)**2
     cost_roughness = (pred_roughness / 5.0)**2
+
+    # 💡 [GPC 버그 수정됨] Total Cost에서 GPC 항을 완전히 제거
     total_cost = (
         w_thickness * cost_thickness +
-        w_gpc * cost_gpc +
         w_roughness * cost_roughness
     )
+    
     return total_cost
 
 
@@ -442,7 +452,7 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     })
     
     result = minimize(
-        objective_function, 
+        objective_function, # 👈 GPC가 제거된 목적 함수
         initial_guess, 
         args=args, 
         method='SLSQP',
@@ -560,7 +570,7 @@ if start_button:
             
             st.info(f"**물리 모델 SC (계산값):** {validation_data['SC (Full Model)']} (최적화 제약조건으로 사용됨)\n\n"
                     f"**AI 모델 SC (학습값):** {ai_predicted_sc}\n\n"
-                    f"**최적화 목표 오차 (Cost):** {optimization_stats['Final Cost (fun)']} (Thickness, GPC, Roughness 기준)")
+                    f"**최적화 목표 오차 (Cost):** {optimization_stats['Final Cost (fun)']} (Thickness, Roughness 기준)")
 
         except Exception as e:
             st.error(f"최적화 중 오류가 발생했습니다: {e}")
