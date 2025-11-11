@@ -49,8 +49,7 @@ df_processed = df.drop(columns=cols_to_drop_high_nan)
 categorical_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
 df_encoded = pd.get_dummies(df_processed.drop(columns=['순서']), columns=categorical_cols, dummy_na=False)
 
-
-# --- 💡 AI 예측 대상 (8개) 정의 (NameError 해결) ---
+# AI 예측 대상 (8개) 정의
 target_cols = [
     'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
     'Density (g/cm3)', 'GPC (A/cycle)',
@@ -58,14 +57,13 @@ target_cols = [
     'Breakdown Field (MV/cm)'
 ]
 
-# --- 💡 AI가 무시할 컬럼 (물리 모델 전용 또는 사용자 입력값) 정의 ---
+# AI가 무시할 컬럼 (물리 모델 전용 또는 사용자 입력값) 정의
 cols_to_ignore_for_ai = [
     'Step Coverage (sc, %)', 
     'Aspect Ratio (AR)'
 ]
 
 try:
-    # NameError가 발생했던 부분의 변수를 명확히 정의 후 사용
     ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(
         columns=target_cols + cols_to_ignore_for_ai
     ).columns.tolist()
@@ -93,9 +91,14 @@ Y_scaler = StandardScaler()
 X_train_scaled = X_scaler.fit_transform(X_train) 
 X_test_scaled = X_scaler.transform(X_test)
 Y_train_scaled = Y_scaler.fit_transform(Y_train)
+# 🚨 NameError 해결: Y_test_scaled 정의 추가
+Y_test_scaled = Y_scaler.transform(Y_test)
 
 INPUT_SIZE = X_train_scaled.shape[1] 
 OUTPUT_SIZE = Y_train.shape[1] 
+
+print(f"\n--- 1단계: 데이터 준비 완료 ---")
+print(f"AI 모델 입력 피처 수: {INPUT_SIZE}")
 
 # --- 2. AI 모델 클래스 정의 및 학습 실행 ---
 class ALDRegressor_Optimized(nn.Module):
@@ -119,7 +122,7 @@ print(f"\n--- 2단계: AI 모델 학습 시작 (최대 {final_epochs} 에포크)
 X_train_tensor = torch.from_numpy(X_train_scaled).float()
 Y_train_tensor = torch.from_numpy(Y_train_scaled).float()
 X_test_tensor = torch.from_numpy(X_test_scaled).float()
-Y_test_tensor = torch.from_numpy(Y_test_scaled).float()
+Y_test_tensor = torch.from_numpy(Y_test_scaled).float() # 이제 이 라인에서 오류가 발생하지 않습니다.
 
 from sklearn.model_selection import train_test_split as split_data
 X_train_final, X_val, Y_train_final, Y_val = split_data(X_train_tensor, Y_train_tensor, test_size=VALIDATION_SPLIT, random_state=42)
