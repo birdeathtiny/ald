@@ -366,7 +366,7 @@ def constraint_step_coverage(
 
 # --- 6. 최적화를 위한 '목적 함수 (Objective Function)' ---
 COST_WEIGHTS = {
-    "thickness": 100.0,
+    "thickness": 10000.0,
     "gpc": 30.0,
     "roughness": 10.0
 }
