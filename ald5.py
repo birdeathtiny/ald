@@ -35,19 +35,20 @@ class ALDRegressor_Optimized(nn.Module):
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(64, output_size) # 👈 9개 출력 (SC 포함)
+            nn.Linear(64, output_size)
         )
     def forward(self, x):
         return self.layer_stack(x)
 
 # -----------------------------------------------------------------
-# ✨ [핵심 로직] 학습 또는 로드를 수행하는 캐시 함수 (디버깅 코드 추가됨)
+# ✨ [핵심 로직] 학습 또는 로드 (Y Imputer 버그 수정됨)
 # -----------------------------------------------------------------
 @st.cache_resource 
 def load_or_train_model():
     """
     앱이 시작될 때 모델과 자산을 로드합니다.
     파일이 없으면 그 자리에서 학습(Training)을 실행합니다.
+    (Y값 Imputation 버그 수정됨: NaN이 있는 Y데이터는 '삭제'함)
     """
     MODEL_PATH = 'best_ald_model.pth'
     ASSETS_PATH = 'ald_assets.joblib'
@@ -106,9 +107,9 @@ def load_or_train_model():
     cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)']
     df_processed = df.drop(columns=cols_to_drop_high_nan)
     categorical_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
-    df_encoded = pd.get_dummies(df_processed.drop(columns=['순서']), columns=categorical_cols, dummy_na=False)
-
-    # (AI가 SC를 예측하도록 target_cols가 수정된 상태)
+    
+    # 💡 [버그 수정 1] Y(정답)에 NaN이 있는 줄을 삭제하기 위해,
+    #                get_dummies를 하기 전에 먼저 Y 컬럼을 정의
     target_cols = [
         'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
         'Density (g/cm3)', 'GPC (A/cycle)',
@@ -120,6 +121,19 @@ def load_or_train_model():
         'Aspect Ratio (AR)'
     ]
 
+    # 💡 [버그 수정 2] '정답지(Y)'에 NaN이 하나라도 있는 줄(row)은 '통째로 삭제'
+    # (SC 컬럼에 NaN이 190개 있으니, 190줄이 여기서 삭제됨)
+    df_processed.dropna(subset=target_cols, inplace=True)
+
+    # (디버깅)
+    st.error(f"--- [디버깅] '정답'이 있는 데이터(Y) 행(row) 수: {len(df_processed)} ---")
+    if len(df_processed) == 0:
+        st.error("--- [치명적 오류] 정답(Y)이 있는 데이터가 0줄입니다. CSV를 확인하세요. ---")
+        st.stop()
+        
+    # (이제 '멀쩡한' 데이터로만 get_dummies 수행)
+    df_encoded = pd.get_dummies(df_processed.drop(columns=['순서']), columns=categorical_cols, dummy_na=False)
+
     try:
         ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(
             columns=target_cols + cols_to_ignore_for_ai
@@ -129,32 +143,35 @@ def load_or_train_model():
         st.error("[치명적 오류] CSV에 없는 컬럼명이 포함되어 있습니다.")
         st.stop()
 
-    # (데이터 분리 및 스케일링 - 이전과 동일)
+    # 💡 [버그 수정 3] Y(정답)는 이제 100% 멀쩡한 데이터이므로 Imputer가 필요 없음
     X = df_encoded[ALL_INPUT_FEATURES_ORDERED].values
-    Y = df_encoded[ALL_OUTPUT_FEATURES_ORDERED].values
+    Y = df_encoded[ALL_OUTPUT_FEATURES_ORDERED].values # (이제 NaN 없음)
+    
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+    
+    # X(입력)는 여전히 NaN이 있을 수 있으므로 Imputer 사용
     X_imputer = KNNImputer(n_neighbors=5)
     X_train = X_imputer.fit_transform(X_train)
     X_test = X_imputer.transform(X_test)
-    Y_imputer = KNNImputer(n_neighbors=5)
-    Y_train = Y_imputer.fit_transform(Y_train)
-    Y_test = Y_imputer.transform(Y_test)
-
-    # 💡 [디버깅 코드 추가] 
-    # 데이터셋 크기를 화면에 직접 출력합니다.
-    st.error(f"--- [디버깅] 데이터셋 X 크기: {X_train.shape} ---")
-    st.error(f"--- [디버깅] 데이터셋 Y 크기: {Y_train.shape} ---")
     
-    X_scaler = StandardScaler() # (디버깅 후 스케일러 정의)
+    # Y(정답)는 NaN이 없으므로 Imputer 삭제
+    # Y_imputer = KNNImputer(n_neighbors=5)
+    # Y_train = Y_imputer.fit_transform(Y_train) 
+    # Y_test = Y_imputer.transform(Y_test)
+
+    # (디버깅)
+    st.error(f"--- [디버깅] 최종 학습 X 크기: {X_train.shape} ---")
+    st.error(f"--- [디버깅] 최종 학습 Y 크기: {Y_train.shape} ---")
+    
+    X_scaler = StandardScaler() 
     Y_scaler = StandardScaler()
 
     INPUT_SIZE = X_train.shape[1]
     OUTPUT_SIZE = Y_train.shape[1] 
 
-    # (데이터가 0개이면, 여기서 에러가 나거나 0으로 설정됨)
     if INPUT_SIZE == 0 or OUTPUT_SIZE == 0 or X_train.shape[0] == 0:
-        st.error("--- [치명적 오류] 학습할 데이터(X 또는 Y)가 0개입니다. CSV 파일 또는 전처리 로직을 확인하세요. ---")
-        st.stop() # (데이터가 0개면 여기서 앱을 중지)
+        st.error("--- [치명적 오류] 학습할 데이터(X 또는 Y)가 0개입니다. ---")
+        st.stop() 
     
     X_train_scaled = X_scaler.fit_transform(X_train)
     X_test_scaled = X_scaler.transform(X_test)
@@ -180,7 +197,6 @@ def load_or_train_model():
         X_train_tensor, Y_train_tensor, test_size=VALIDATION_SPLIT, random_state=42
     )
     
-    # (데이터셋이 비어있는지 다시 한번 확인)
     if len(X_train_final) == 0:
         st.error("--- [치명적 오류] Validation split 후 학습 데이터가 0개입니다. ---")
         st.stop()
@@ -204,7 +220,6 @@ def load_or_train_model():
     for epoch in range(final_epochs):
         final_model.train()
         
-        # (train_loader가 비어있는지 확인)
         if len(train_loader) == 0:
             st.error("--- [치명적 오류] Train Dataloader가 비어있습니다. (학습 중단) ---")
             break
@@ -253,7 +268,7 @@ def load_or_train_model():
     }
     joblib.dump({k: v for k, v in assets_data.items() if k != 'model'}, ASSETS_PATH)
     st.success(f"✅ 전처리기(Scaler) 및 자산을 '{ASSETS_PATH}'에 저장했습니다.")
-    assets_data["model"] = final_model # (반환값에는 모델 객체 포함)
+    assets_data["model"] = final_model 
     return assets_data
 # -----------------------------------------------------------------
 # [앱 시작]
@@ -382,11 +397,11 @@ def constraint_step_coverage(
     
     # 💡 [SC 제약 완화됨] 
     if target_ar <= 5:
-        TARGET_SC_MIN = 80.0  # (기존 90.0)
+        TARGET_SC_MIN = 80.0
     elif target_ar <= 15:
-        TARGET_SC_MIN = 60.0  # (기존 80.0)
+        TARGET_SC_MIN = 60.0
     else:
-        TARGET_SC_MIN = 40.0  # (기존 70.0)
+        TARGET_SC_MIN = 40.0
     
     T_celsius = x[0]; P_torr = x[1]; Pulse_Time_s = x[2]
     
