@@ -64,7 +64,7 @@ cols_to_ignore_for_ai = [
 ]
 
 try:
-    # --- 💡 NameError 해결: 리스트를 먼저 합치는 대신, drop 인수를 명확히 구성 ---
+    # NameError 해결: 변수를 명확히 정의 후 drop
     cols_to_drop_final = target_cols + cols_to_ignore_for_ai
     ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(
         columns=cols_to_drop_final
