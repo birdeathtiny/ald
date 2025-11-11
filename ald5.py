@@ -371,7 +371,7 @@ def constraint_step_coverage(
 # --- 6. 최적화를 위한 '목적 함수 (Objective Function)' ---
 # 💡 [GPC 버그 수정됨]
 COST_WEIGHTS = {
-    "thickness": 100.0, # 👈 두께 최우선
+    "thickness": 10000.0, # 👈 두께 최우선
     "gpc": 30.0,         # (사용 안 함)
     "roughness": 10.0
 }
