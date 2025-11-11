@@ -1,0 +1,7 @@
+# 생성된 모델 및 자산 파일
+*.pth
+*.joblib
+
+# 기타 시스템 파일
+.DS_Store
+__pycache__/
