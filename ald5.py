@@ -35,7 +35,7 @@ class ALDRegressor_Optimized(nn.Module):
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(64, output_size)
+            nn.Linear(64, output_size) # 👈 9개 출력 (SC 포함)
         )
     def forward(self, x):
         return self.layer_stack(x)
@@ -43,7 +43,7 @@ class ALDRegressor_Optimized(nn.Module):
 # -----------------------------------------------------------------
 # ✨ [핵심 로직] 학습 또는 로드를 수행하는 캐시 함수
 # -----------------------------------------------------------------
-@st.cache_resource # 👈 이 앱 세션에서 딱 한 번만 실행됨
+@st.cache_resource
 def load_or_train_model():
     """
     앱이 시작될 때 모델과 자산을 로드합니다.
@@ -52,37 +52,30 @@ def load_or_train_model():
     MODEL_PATH = 'best_ald_model.pth'
     ASSETS_PATH = 'ald_assets.joblib'
 
-    # --- A. 파일이 이미 있는 경우 (학습 건너뛰기) ---
     if os.path.exists(MODEL_PATH) and os.path.exists(ASSETS_PATH):
         st.info(f"'{MODEL_PATH}'와 '{ASSETS_PATH}'에서 기존 자산을 로드합니다... (학습 건너뜀)")
-        
-        # 1. 스케일러 등 자산 로드
         assets_data = joblib.load(ASSETS_PATH)
-        
-        # 2. AI 모델 로드
         try:
+            # (AI가 SC를 예측하도록 target_cols가 수정된 상태)
+            target_cols_count = len(assets_data["ALL_OUTPUT_FEATURES_ORDERED"]) # 9
             model = ALDRegressor_Optimized(
                 input_size=len(assets_data["ALL_INPUT_FEATURES_ORDERED"]),
-                output_size=len(assets_data["ALL_OUTPUT_FEATURES_ORDERED"]),
+                output_size=target_cols_count, 
                 dropout_rate=0.28
             )
             model.load_state_dict(torch.load(MODEL_PATH))
             model.eval()
-            
             assets_data["model"] = model
             st.success("✅ 자산 로드 완료.")
             return assets_data
-        
         except Exception as e:
             st.warning(f"모델 로드 실패: {e}. 자산을 삭제하고 재학습을 시도합니다.")
             if os.path.exists(MODEL_PATH): os.remove(MODEL_PATH)
             if os.path.exists(ASSETS_PATH): os.remove(ASSETS_PATH)
 
-    # --- B. 파일이 없는 경우 (최초 1회 학습 실행) ---
     st.warning(f"'{MODEL_PATH}' 파일이 없습니다. 지금부터 모델 학습을 시작합니다...")
     st.info("이 작업은 앱 최초 실행 시 한 번만 수행되며, 수 분 정도 걸릴 수 있습니다.")
     
-    # [기존 1. 모델 학습 및 데이터 환경 준비]
     file_path = "AI_ALD1.csv.csv"
     try:
         df = pd.read_csv(file_path, encoding='CP949')
@@ -90,6 +83,7 @@ def load_or_train_model():
         st.error(f"[치명적 오류] 파일 로드 실패: {e}. 프로그램을 종료합니다.")
         st.stop()
 
+    # (데이터 전처리 - 이전과 동일)
     df.replace('-', np.nan, inplace=True)
     cols_to_convert = [
         'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
@@ -101,22 +95,22 @@ def load_or_train_model():
     ]
     for col in cols_to_convert:
         df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
+    df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H_O (Implied)': 'H_O'})
     df['Co-reactant'] = df['Co-reactant'].replace({'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
     cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)']
     df_processed = df.drop(columns=cols_to_drop_high_nan)
     categorical_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
     df_encoded = pd.get_dummies(df_processed.drop(columns=['순서']), columns=categorical_cols, dummy_na=False)
 
+    # (AI가 SC를 예측하도록 target_cols가 수정된 상태)
     target_cols = [
         'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
         'Density (g/cm3)', 'GPC (A/cycle)',
         'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)',
-        'Breakdown Field (MV/cm)'
+        'Breakdown Field (MV/cm)',
+        'Step Coverage (sc, %)'  # 👈 AI 예측 대상에 SC 포함 (총 9개)
     ]
     cols_to_ignore_for_ai = [
-        'Step Coverage (sc, %)',
         'Aspect Ratio (AR)'
     ]
 
@@ -129,10 +123,10 @@ def load_or_train_model():
         st.error("[치명적 오류] CSV에 없는 컬럼명이 포함되어 있습니다.")
         st.stop()
 
+    # (데이터 분리 및 스케일링 - 이전과 동일)
     X = df_encoded[ALL_INPUT_FEATURES_ORDERED].values
     Y = df_encoded[ALL_OUTPUT_FEATURES_ORDERED].values
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-
     X_imputer = KNNImputer(n_neighbors=5)
     X_train = X_imputer.fit_transform(X_train)
     X_test = X_imputer.transform(X_test)
@@ -146,9 +140,9 @@ def load_or_train_model():
     Y_train_scaled = Y_scaler.fit_transform(Y_train)
     Y_test_scaled = Y_scaler.transform(Y_test)
     INPUT_SIZE = X_train_scaled.shape[1]
-    OUTPUT_SIZE = Y_train.shape[1]
+    OUTPUT_SIZE = Y_train.shape[1] # 👈 9
 
-    # [기존 2. AI 모델 클래스 정의 및 학습 실행]
+    # (모델 학습 - 이전과 동일)
     final_learning_rate = 0.00195
     final_dropout_rate = 0.28
     final_batch_size = 16
@@ -156,9 +150,8 @@ def load_or_train_model():
     VALIDATION_SPLIT = 0.2
     PATIENCE = 30
     WEIGHT_DECAY = 1e-5
-
     st.info(f"--- 2단계: AI 모델 학습 시작 (최대 {final_epochs} 에포크) ---")
-
+    st.info(f"AI 모델 출력 피처 수: {OUTPUT_SIZE} (SC 포함)")
     X_train_tensor = torch.from_numpy(X_train_scaled).float()
     Y_train_tensor = torch.from_numpy(Y_train_scaled).float()
     X_test_tensor = torch.from_numpy(X_test_scaled).float()
@@ -170,7 +163,6 @@ def load_or_train_model():
     val_dataset = TensorDataset(X_val, Y_val)
     train_loader = DataLoader(train_dataset, batch_size=final_batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=final_batch_size, shuffle=False)
-
     final_model = ALDRegressor_Optimized(INPUT_SIZE, OUTPUT_SIZE, final_dropout_rate)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(
@@ -178,12 +170,9 @@ def load_or_train_model():
         lr=final_learning_rate,
         weight_decay=WEIGHT_DECAY
     )
-
     best_val_loss = float('inf')
     patience_counter = 0
-
     progress_bar = st.progress(0, "학습 진행 중...")
-    
     for epoch in range(final_epochs):
         final_model.train()
         for inputs, targets in train_loader:
@@ -192,7 +181,6 @@ def load_or_train_model():
             loss = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
-        
         final_model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -200,28 +188,21 @@ def load_or_train_model():
                 outputs = final_model(inputs)
                 loss = criterion(outputs, targets)
                 val_loss += loss.item()
-        
         val_loss /= len(val_loader)
-        
         progress_bar.progress((epoch + 1) / final_epochs, f"Epoch [{epoch+1}/{final_epochs}], Val Loss: {val_loss:.4f}")
-
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(final_model.state_dict(), MODEL_PATH) 
             patience_counter = 0
         else:
             patience_counter += 1
-            
         if patience_counter >= PATIENCE:
             st.info(f"[조기 종료] Epoch {epoch+1}에서 학습을 중단합니다.")
             break
-    
     progress_bar.empty()
     st.success(f"✅ 모델 학습 완료. '{MODEL_PATH}'에 저장되었습니다.")
-    
     final_model.load_state_dict(torch.load(MODEL_PATH))
     final_model.eval()
-
     assets_data = {
         "model": final_model,
         "X_scaler": X_scaler,
@@ -229,10 +210,8 @@ def load_or_train_model():
         "ALL_INPUT_FEATURES_ORDERED": ALL_INPUT_FEATURES_ORDERED,
         "ALL_OUTPUT_FEATURES_ORDERED": ALL_OUTPUT_FEATURES_ORDERED
     }
-
     joblib.dump({k: v for k, v in assets_data.items() if k != 'model'}, ASSETS_PATH)
     st.success(f"✅ 전처리기(Scaler) 및 자산을 '{ASSETS_PATH}'에 저장했습니다.")
-
     return assets_data
 # -----------------------------------------------------------------
 # [앱 시작]
@@ -251,11 +230,12 @@ final_model = ASSETS["model"]
 X_scaler = ASSETS["X_scaler"]
 Y_scaler = ASSETS["Y_scaler"]
 ALL_INPUT_FEATURES_ORDERED = ASSETS["ALL_INPUT_FEATURES_ORDERED"]
-ALL_OUTPUT_FEATURES_ORDERED = ASSETS["ALL_OUTPUT_FEATURES_ORDERED"]
+ALL_OUTPUT_FEATURES_ORDERED = ASSETS["ALL_OUTPUT_FEATURES_ORDERED"] 
 
 
 # --- 3. 물리 변수 계산 함수 정의 (SC 전담) ---
 def calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
+    # (이 함수는 SC 계산에 직접 쓰이진 않지만, 결과 '검증' 창에 표시하기 위해 유지)
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     d_precursor_m = const["diameter_m"]
     T_K = T_celsius + 273.15
@@ -265,24 +245,49 @@ def calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m
     Kn = lambda_m / L_feature_m
     return lambda_m, Kn
 
+# 💡 [수정됨] SC 계산 함수가 새 공식(Steady-State)으로 완전히 교체됨
 def calculate_full_sc_model(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
+    
+    # --- 1. 상수 및 변수 정의 (이전 모델과 동일) ---
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     c = const["sticking_c"]; q = const["max_sites_q"]; d_precursor_m = const["diameter_m"]; M_A_kg = const["mass_g_mol"] / 1000.0 / N_A
-    T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322; L_m = AR_value * CD_m
+    
+    T_K = T_celsius + 273.15
+    P_Pa = P_torr * 133.322       # (p_A0, 압력)
+    L_m = AR_value * CD_m         # (L, 트렌치 길이)
+    t_pulse = Pulse_Time_s        # (t_pulse, 펄스 시간)
+
+    # --- 2. 중간 물리값 계산 (이전 모델과 동일) ---
     v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_A_kg))
     lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
     D_A = (1/3) * lambda_m * v_avg
     D_Kn = (1/3) * v_avg * CD_m
     D_eff = 1 / ((1 / D_A) + (1 / D_Kn))
-    Q = 1 / np.sqrt(2 * np.pi * M_A_kg * k_B * T_K)
-    lambda_D = np.sqrt(D_eff * Pulse_Time_s)
-    L_over_lambda_D = L_m / (lambda_D + 1e-12)
-    constant_term = (c * Q * P_Pa * Pulse_Time_s) / q
-    theta_0 = 1.0 - np.exp(-constant_term)
-    exp_inner_term = -constant_term * np.exp(-L_over_lambda_D)
-    theta_L = 1.0 - np.exp(exp_inner_term)
-    SC_full_model = theta_L / (theta_0 + 1e-12)
-    return np.clip(SC_full_model * 100.0, 0.0, 100.0)
+
+    # --- 3. 새 공식에 필요한 변수 계산 ---
+    
+    # Q (기체 상수 관련 텀, 이전 모델에서 가져옴)
+    Q = 1 / np.sqrt(2 * np.pi * M_A_kg * k_B * T_K) 
+    
+    # x_s (특성 확산 길이, lambda_D로 가정)
+    # (이전 모델의 lambda_D = np.sqrt(D_eff * Pulse_Time_s)와 동일)
+    x_s = np.sqrt(D_eff * t_pulse)
+    
+    # --- 4. 새 SC 공식 (Steady-State) 적용 ---
+    # SC = [ 1 - exp( - (cQ/q) * p_A0 * (1 - L/x_s) * t_pulse ) ] * 100%
+
+    # (cQ/q) * p_A0 * t_pulse
+    term1 = (c * Q / q) * P_Pa * t_pulse
+    
+    # (1 - L/x_s), 0보다 작아지지 않도록 클리핑
+    spatial_term = np.clip( (1.0 - (L_m / (x_s + 1e-12))), 0.0, 1.0 )
+            
+    exponent_argument = -term1 * spatial_term
+    
+    SC_value = 1.0 - np.exp(exponent_argument)
+    
+    return np.clip(SC_value * 100.0, 0.0, 100.0)
+
 
 # --- 4. AI 모델 입력을 위한 '번역기' 함수 ---
 def create_model_input(
@@ -321,11 +326,11 @@ def predict_from_recipe(
     with torch.no_grad():
         Y_pred_scaled_tensor = final_model(X_tensor)
     Y_pred_unscaled = Y_scaler.inverse_transform(Y_pred_scaled_tensor.numpy())[0]
+    # (이제 9개 항목의 Series가 반환됨)
     predicted_results = pd.Series(Y_pred_unscaled, index=ALL_OUTPUT_FEATURES_ORDERED).round(4)
     return predicted_results
 
 # --- 5.5. 최적화를 위한 '제약 조건 함수' ---
-# 💡 [수정 2] 최적화가 '성공'할 수 있도록 SC 제약 조건을 완화합니다.
 def constraint_step_coverage(
     x: np.ndarray,
     user_input: Dict[str, Any],
@@ -336,16 +341,17 @@ def constraint_step_coverage(
     
     target_ar = user_input["Target AR"]
     
-    # 👇 [수정됨] SC 목표치를 완화하여 최적화가 실패하지 않도록 함
+    # (SC 목표치 완화 - 이전과 동일)
     if target_ar <= 5:
-        TARGET_SC_MIN = 90.0  # (기존 98.0)
+        TARGET_SC_MIN = 90.0
     elif target_ar <= 15:
-        TARGET_SC_MIN = 80.0  # (기존 90.0)
+        TARGET_SC_MIN = 80.0
     else:
-        TARGET_SC_MIN = 70.0  # (기존 85.0)
+        TARGET_SC_MIN = 70.0
     
     T_celsius = x[0]; P_torr = x[1]; Pulse_Time_s = x[2]
     
+    # 👈 제약조건은 새로 수정된 '물리 모델' SC 함수를 호출함
     phys_sc = calculate_full_sc_model(
         P_torr=P_torr,
         T_celsius=T_celsius,
@@ -355,7 +361,6 @@ def constraint_step_coverage(
         CD_m=user_input["CD (nm)"] * 1e-9
     )
     
-    # (phys_sc가 TARGET_SC_MIN보다 크면 0보다 큰 값이 반환되어 '성공' 처리됨)
     return phys_sc - TARGET_SC_MIN
 
 
@@ -365,7 +370,7 @@ COST_WEIGHTS = {
     "gpc": 30.0,
     "roughness": 10.0
 }
-
+# (목적 함수는 SC를 직접 최적화하지 않으므로 수정 불필요)
 def objective_function(
     x: np.ndarray,
     user_input: Dict[str, Any],
@@ -394,6 +399,7 @@ def objective_function(
     pred_thickness = predicted_results.get('Thickness (nm)', target_thickness)
     pred_gpc = predicted_results.get('GPC (A/cycle)', 0)
     pred_roughness = predicted_results.get('Surface Roughness (RMS, nm)', 10)
+    
     cost_thickness = ((pred_thickness - target_thickness) / target_thickness)**2
     cost_gpc = ((pred_gpc - target_gpc_ideal) / target_gpc_ideal)**2
     cost_roughness = (pred_roughness / 5.0)**2
@@ -412,18 +418,12 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     co_reactant = 'H2O' if precursor in ['TMA', 'TDMAH'] else 'O3'
     purge_gas = "N2"
     
-    # (변수별 경계값 정의)
     bounds = [
-        (150, 400),     # Temperature (c)
-        (0.01, 1.0),    # Pressure (torr)
-        (0.05, 2.0),    # Precursor_Pulse Time (s)
-        (1.0, 10.0),    # Purge Time (s)
-        (50, 500),      # Purge Gas Flow Rate (cm3/min)
-        (max(10, int(target_thickness / 2.0)), int(target_thickness / 0.3)) # Cycles (n)
+        (150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500),
+        (max(10, int(target_thickness / 2.0)), int(target_thickness / 0.3))
     ]
     
-    # 💡 [수정 1] '초기 추정치'를 매번 랜덤하게 생성합니다.
-    # (고정된 정수 값 대신, 각 변수의 경계값 내에서 무작위로 시작)
+    # (랜덤 초기값 - 이전과 동일)
     initial_guess = [
         np.random.uniform(bounds[0][0], bounds[0][1]), # Temp
         np.random.uniform(bounds[1][0], bounds[1][1]), # Pressure
@@ -437,13 +437,13 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     
     constraints = ({
         'type': 'ineq',
-        'fun': constraint_step_coverage, # 👈 [수정 2]에서 완화된 제약조건 사용
+        'fun': constraint_step_coverage, 
         'args': args
     })
     
     result = minimize(
         objective_function, 
-        initial_guess, # 👈 [수정 1]에서 생성된 랜덤 초기값 사용
+        initial_guess, 
         args=args, 
         method='SLSQP',
         bounds=bounds, 
@@ -452,24 +452,27 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     )
     
     if not result.success:
-        # (제약조건을 완화했음에도 실패할 경우 경고)
         st.warning(f"[경고] 최적화가 수렴에 실패했습니다: {result.message}")
         st.info("현재 조건으로 제안(SC)을 만족하는 레시피를 찾기 어려울 수 있습니다.")
         
     optimal_x = result.x
     
-    # (이하 결과 보고 로직은 동일)
     optimal_recipe_params = {
         "Temperature (c)": optimal_x[0], "Pressure (torr)": optimal_x[1],
         "Precursor_Pulse Time (s)": optimal_x[2], "Purge Time (s)": optimal_x[3],
         "Purge Gas Flow Rate (cm3/min)": optimal_x[4], "Cycles (n)": optimal_x[5],
         "Co-reactant_Pulse Time (s)": optimal_x[2]
     }
+    
+    # (9개 항목 예측)
     predicted_results = predict_from_recipe(
         optimal_recipe_params, precursor, co_reactant, purge_gas
     )
+    
     T = optimal_x[0]; P = optimal_x[1]; Pulse_Time = optimal_x[2]
+    # (새 공식으로 물리 SC 계산)
     SC_full_model_value = calculate_full_sc_model(P, T, Pulse_Time, target_ar, precursor, CD_m)
+    
     lambda_m, Kn = calculate_physical_parameters(T, P, precursor, CD_m)
 
     optimal_recipe_report = {
@@ -485,7 +488,7 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     validation_data = {
         "Mean Free Path (λ) [m]": f"{lambda_m:.2e}", "Knudsen Number (Kn)": f"{Kn:.2f}",
         "Sticking Coeff. (c) 사용 ": f"{PRECURSOR_CONSTANTS.get(precursor, PRECURSOR_CONSTANTS['TMA'])['sticking_c']:.3e}",
-        "SC (Full Model)": f"{SC_full_model_value:.4f} %",
+        "SC (Full Model)": f"{SC_full_model_value:.4f} %", # 👈 '물리 모델' SC (새 공식)
     }
     optimization_stats = {
         "Optimization Success": result.success, "Optimization Message": result.message,
@@ -541,13 +544,22 @@ if start_button:
                 st.subheader("📈 최적화(SLSQP) 수렴 리포트")
                 st.dataframe(pd.Series(optimization_stats).to_frame("상태"))
             with col2:
-                st.subheader("💡 AI 예측 박막 특성 (8가지)")
-                st.dataframe(predicted_results.to_frame("예측값"))
+                # 👈 (SC 포함 9개 항목 표시)
+                st.subheader("💡 AI 예측 박막 특성 (9가지)")
+                st.dataframe(predicted_results.to_frame("AI 예측값 (학습된 값)"))
+                
+                # 👈 (새 공식으로 계산된 물리 SC 표시)
                 st.subheader("🔬 물리 기반 검증 (SC)")
-                st.dataframe(pd.Series(validation_data).to_frame("값"))
+                st.dataframe(pd.Series(validation_data).to_frame("계산된 값 (물리 모델)"))
 
             st.markdown("---")
-            st.info(f"**물리 모델 SC:** {validation_data['SC (Full Model)']} (최적화 제약조건으로 사용됨)\n\n"
+            
+            ai_predicted_sc = predicted_results.get('Step Coverage (sc, %)', 'N/A')
+            if ai_predicted_sc != 'N/A':
+                ai_predicted_sc = f"{ai_predicted_sc:.4f} %"
+            
+            st.info(f"**물리 모델 SC (계산값):** {validation_data['SC (Full Model)']} (최적화 제약조건으로 사용됨)\n\n"
+                    f"**AI 모델 SC (학습값):** {ai_predicted_sc}\n\n"
                     f"**최적화 목표 오차 (Cost):** {optimization_stats['Final Cost (fun)']} (Thickness, GPC, Roughness 기준)")
 
         except Exception as e:
