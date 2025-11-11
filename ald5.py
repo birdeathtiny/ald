@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from typing import Dict, Any, List, Tuple
 from scipy.optimize import minimize
-import joblib # 👈 자산 저장을 위해 필요
+import joblib
 
 # --- 0. 물리/화학 상수 테이블 정의 ---
 N_A = 6.022e23
@@ -182,7 +182,6 @@ def load_or_train_model():
     best_val_loss = float('inf')
     patience_counter = 0
 
-    # (학습 진행률 표시를 위한 st.progress)
     progress_bar = st.progress(0, "학습 진행 중...")
     
     for epoch in range(final_epochs):
@@ -204,12 +203,10 @@ def load_or_train_model():
         
         val_loss /= len(val_loader)
         
-        # (프로그레스 바 업데이트)
         progress_bar.progress((epoch + 1) / final_epochs, f"Epoch [{epoch+1}/{final_epochs}], Val Loss: {val_loss:.4f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            # (학습이 완료된 모델 상태를 저장)
             torch.save(final_model.state_dict(), MODEL_PATH) 
             patience_counter = 0
         else:
@@ -219,14 +216,12 @@ def load_or_train_model():
             st.info(f"[조기 종료] Epoch {epoch+1}에서 학습을 중단합니다.")
             break
     
-    progress_bar.empty() # 프로그레스 바 제거
+    progress_bar.empty()
     st.success(f"✅ 모델 학습 완료. '{MODEL_PATH}'에 저장되었습니다.")
     
-    # 학습된 최종 모델 로드 (혹은 이미 메모리에 있는 것 사용)
     final_model.load_state_dict(torch.load(MODEL_PATH))
     final_model.eval()
 
-    # [자산 패키징]
     assets_data = {
         "model": final_model,
         "X_scaler": X_scaler,
@@ -235,7 +230,6 @@ def load_or_train_model():
         "ALL_OUTPUT_FEATURES_ORDERED": ALL_OUTPUT_FEATURES_ORDERED
     }
 
-    # (스케일러와 피처 리스트를 파일로 저장)
     joblib.dump({k: v for k, v in assets_data.items() if k != 'model'}, ASSETS_PATH)
     st.success(f"✅ 전처리기(Scaler) 및 자산을 '{ASSETS_PATH}'에 저장했습니다.")
 
@@ -246,16 +240,13 @@ def load_or_train_model():
 st.set_page_config(page_title="ALD 레시피 최적화", layout="wide")
 st.title("✨ AI 기반 ALD 공정 최적화 시스템")
 
-# 1. 자산 로드 (이 함수가 모든 것을 처리)
-# (최초 실행 시 여기서 학습이 발생하고 멈춰 있게 됨)
 try:
     ASSETS = load_or_train_model()
 except Exception as e:
     st.error(f"자산 로드 또는 모델 학습 중 치명적 오류 발생: {e}")
     st.exception(e)
-    st.stop() # 👈 오류 시 앱 중지
+    st.stop()
 
-# 2. 로드된 자산을 전역 변수로 할당
 final_model = ASSETS["model"]
 X_scaler = ASSETS["X_scaler"]
 Y_scaler = ASSETS["Y_scaler"]
@@ -264,7 +255,6 @@ ALL_OUTPUT_FEATURES_ORDERED = ASSETS["ALL_OUTPUT_FEATURES_ORDERED"]
 
 
 # --- 3. 물리 변수 계산 함수 정의 (SC 전담) ---
-# (이전과 동일 ... 생략)
 def calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
     const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
     d_precursor_m = const["diameter_m"]
@@ -295,7 +285,6 @@ def calculate_full_sc_model(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor
     return np.clip(SC_full_model * 100.0, 0.0, 100.0)
 
 # --- 4. AI 모델 입력을 위한 '번역기' 함수 ---
-# (이전과 동일 ... 생략)
 def create_model_input(
     recipe_params: Dict[str, Any],
     precursor_name: str,
@@ -319,7 +308,6 @@ def create_model_input(
     return input_df
 
 # --- 5. '레시피 -> AI 예측' 수행 함수 ---
-# (이전과 동일 ... 생략)
 def predict_from_recipe(
     recipe_params: Dict[str, Any],
     precursor_name: str,
@@ -336,13 +324,8 @@ def predict_from_recipe(
     predicted_results = pd.Series(Y_pred_unscaled, index=ALL_OUTPUT_FEATURES_ORDERED).round(4)
     return predicted_results
 
-# --- 5.5 & 6. 최적화 '제약 조건' 및 '목적 함수' ---
-# (이전과 동일 ... 생략)
-COST_WEIGHTS = {
-    "thickness": 100.0,
-    "gpc": 30.0,
-    "roughness": 10.0
-}
+# --- 5.5. 최적화를 위한 '제약 조건 함수' ---
+# 💡 [수정 2] 최적화가 '성공'할 수 있도록 SC 제약 조건을 완화합니다.
 def constraint_step_coverage(
     x: np.ndarray,
     user_input: Dict[str, Any],
@@ -350,17 +333,38 @@ def constraint_step_coverage(
     purge_gas_name: str,
     cost_weights: Dict[str, float]
 ) -> float:
+    
     target_ar = user_input["Target AR"]
-    if target_ar <= 5: TARGET_SC_MIN = 98.0
-    elif target_ar <= 15: TARGET_SC_MIN = 90.0
-    else: TARGET_SC_MIN = 85.0
+    
+    # 👇 [수정됨] SC 목표치를 완화하여 최적화가 실패하지 않도록 함
+    if target_ar <= 5:
+        TARGET_SC_MIN = 90.0  # (기존 98.0)
+    elif target_ar <= 15:
+        TARGET_SC_MIN = 80.0  # (기존 90.0)
+    else:
+        TARGET_SC_MIN = 70.0  # (기존 85.0)
+    
     T_celsius = x[0]; P_torr = x[1]; Pulse_Time_s = x[2]
+    
     phys_sc = calculate_full_sc_model(
-        P_torr=P_torr, T_celsius=T_celsius, Pulse_Time_s=Pulse_Time_s,
-        AR_value=user_input["Target AR"], precursor_name=user_input["Precursor"],
+        P_torr=P_torr,
+        T_celsius=T_celsius,
+        Pulse_Time_s=Pulse_Time_s,
+        AR_value=user_input["Target AR"],
+        precursor_name=user_input["Precursor"],
         CD_m=user_input["CD (nm)"] * 1e-9
     )
+    
+    # (phys_sc가 TARGET_SC_MIN보다 크면 0보다 큰 값이 반환되어 '성공' 처리됨)
     return phys_sc - TARGET_SC_MIN
+
+
+# --- 6. 최적화를 위한 '목적 함수 (Objective Function)' ---
+COST_WEIGHTS = {
+    "thickness": 100.0,
+    "gpc": 30.0,
+    "roughness": 10.0
+}
 
 def objective_function(
     x: np.ndarray,
@@ -400,31 +404,61 @@ def objective_function(
     )
     return total_cost
 
+
 # --- 7. 레시피 제안 및 검증 함수 (실제 최적화 수행) ---
-# (이전과 동일 ... 생략)
 def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
     precursor = user_input["Precursor"]; target_thickness = user_input["Thickness (nm)"]; target_ar = user_input["Target AR"]; CD_m = user_input["CD (nm)"] * 1e-9
+    
     co_reactant = 'H2O' if precursor in ['TMA', 'TDMAH'] else 'O3'
     purge_gas = "N2"
+    
+    # (변수별 경계값 정의)
     bounds = [
-        (150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500),
-        (max(10, int(target_thickness / 2.0)), int(target_thickness / 0.3))
+        (150, 400),     # Temperature (c)
+        (0.01, 1.0),    # Pressure (torr)
+        (0.05, 2.0),    # Precursor_Pulse Time (s)
+        (1.0, 10.0),    # Purge Time (s)
+        (50, 500),      # Purge Gas Flow Rate (cm3/min)
+        (max(10, int(target_thickness / 2.0)), int(target_thickness / 0.3)) # Cycles (n)
     ]
+    
+    # 💡 [수정 1] '초기 추정치'를 매번 랜덤하게 생성합니다.
+    # (고정된 정수 값 대신, 각 변수의 경계값 내에서 무작위로 시작)
     initial_guess = [
-        300, 0.5, 0.1, 5.0, 300, int(target_thickness / 1.0)
+        np.random.uniform(bounds[0][0], bounds[0][1]), # Temp
+        np.random.uniform(bounds[1][0], bounds[1][1]), # Pressure
+        np.random.uniform(bounds[2][0], bounds[2][1]), # Pulse Time
+        np.random.uniform(bounds[3][0], bounds[3][1]), # Purge Time
+        np.random.uniform(bounds[4][0], bounds[4][1]), # Purge Flow
+        np.random.uniform(bounds[5][0], bounds[5][1])  # Cycles
     ]
+    
     args = (user_input, co_reactant, purge_gas, COST_WEIGHTS)
-    constraints = ({'type': 'ineq', 'fun': constraint_step_coverage, 'args': args})
+    
+    constraints = ({
+        'type': 'ineq',
+        'fun': constraint_step_coverage, # 👈 [수정 2]에서 완화된 제약조건 사용
+        'args': args
+    })
+    
     result = minimize(
-        objective_function, initial_guess, args=args, method='SLSQP',
-        bounds=bounds, constraints=constraints,
+        objective_function, 
+        initial_guess, # 👈 [수정 1]에서 생성된 랜덤 초기값 사용
+        args=args, 
+        method='SLSQP',
+        bounds=bounds, 
+        constraints=constraints,
         options={'maxiter': 100, 'eps': 1e-6}
     )
     
     if not result.success:
-        st.warning(f"[경고] 최적화 수렴 실패: {result.message}")
+        # (제약조건을 완화했음에도 실패할 경우 경고)
+        st.warning(f"[경고] 최적화가 수렴에 실패했습니다: {result.message}")
+        st.info("현재 조건으로 제안(SC)을 만족하는 레시피를 찾기 어려울 수 있습니다.")
         
     optimal_x = result.x
+    
+    # (이하 결과 보고 로직은 동일)
     optimal_recipe_params = {
         "Temperature (c)": optimal_x[0], "Pressure (torr)": optimal_x[1],
         "Precursor_Pulse Time (s)": optimal_x[2], "Purge Time (s)": optimal_x[3],
@@ -462,7 +496,6 @@ def generate_optimal_recipe_from_model(user_input: Dict[str, Any]):
 
 
 # --- 8. Streamlit UI 구성 ---
-# (이 코드는 load_or_train_model 함수가 성공적으로 완료된 후에만 실행됨)
 available_precursors = {1: "TMA", 2: "TDMAH", 3: "TEMAHf", 4: "Zr(NEt2)4"}
 
 with st.sidebar:
