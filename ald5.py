@@ -14,7 +14,6 @@ from typing import Dict, Any, List, Tuple
 from scipy.optimize import minimize
 
 # --- 0. 물리/화학 상수 테이블 정의 ---
-# (이전과 동일)
 N_A = 6.022e23
 k_B = 1.38e-23
 
@@ -32,7 +31,6 @@ COST_WEIGHTS = {
 
 # --- 2. AI 모델 클래스 정의 ---
 class ALDRegressor_Optimized(nn.Module):
-    # (이전과 동일)
     def __init__(self, input_size, output_size, dropout_rate):
         super(ALDRegressor_Optimized, self).__init__()
         self.output_size = output_size
@@ -52,11 +50,9 @@ class ALDRegressor_Optimized(nn.Module):
 class ALDOptimizer:
     
     # --- 1. 초기화 및 모델 학습 ---
-    
     def __init__(self, file_path: str):
         print("--- 1단계: ALD 최적화 시스템 초기화 시작 ---")
         
-        # (하이퍼파라미터 설정 등 이전과 동일)
         self.final_learning_rate = 0.00195
         self.final_dropout_rate = 0.28
         self.final_batch_size = 16
@@ -80,8 +76,8 @@ class ALDOptimizer:
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         """데이터를 로드하고 전처리합니다."""
-        # (이전과 동일)
         try:
+            # 파일 경로 확인 필요
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
             print(f"\n[치명적 오류] 파일 로드 실패: {e}. 프로그램을 종료합니다.")
@@ -97,21 +93,32 @@ class ALDOptimizer:
             'Breakdown Field (MV/cm)'
         ]
         for col in cols_to_convert:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
-        df['Co-reactant'] = df['Co-reactant'].replace({'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
+        if 'Co-reactant' in df.columns:
+            df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
+            df['Co-reactant'] = df['Co-reactant'].replace({'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
+        
         cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)']
-        df_processed = df.drop(columns=cols_to_drop_high_nan)
+        # 실제 데이터프레임에 해당 컬럼이 있는지 확인 후 드롭
+        existing_cols_to_drop = [c for c in cols_to_drop_high_nan if c in df.columns]
+        df_processed = df.drop(columns=existing_cols_to_drop)
+
         categorical_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
-        df_encoded = pd.get_dummies(df_processed.drop(columns=['순서']), columns=categorical_cols, dummy_na=False)
+        # 실제 존재하는 컬럼만 인코딩
+        existing_cat_cols = [c for c in categorical_cols if c in df_processed.columns]
+        
+        if '순서' in df_processed.columns:
+            df_processed = df_processed.drop(columns=['순서'])
+
+        df_encoded = pd.get_dummies(df_processed, columns=existing_cat_cols, dummy_na=False)
         
         return df_encoded
 
     def _prepare_datasets(self, df_encoded: pd.DataFrame):
         """AI 모델의 입/출력 정의 및 데이터셋을 준비합니다."""
         
-        # (이전과 동일)
         target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)',
@@ -121,32 +128,43 @@ class ALDOptimizer:
         ]
         cols_to_ignore_for_ai = ['Aspect Ratio (AR)']
 
+        # 데이터프레임에 실제로 존재하는 타겟 컬럼만 선택 (오류 방지)
+        available_target_cols = [col for col in target_cols if col in df_encoded.columns]
+        if not available_target_cols:
+             raise ValueError("타겟 컬럼을 찾을 수 없습니다.")
+
         try:
-            self.ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(
-                columns=target_cols + cols_to_ignore_for_ai
-            ).columns.tolist()
-            self.ALL_OUTPUT_FEATURES_ORDERED = target_cols
+            # 입력 피처: 타겟과 무시할 컬럼 제외한 나머지
+            cols_to_drop = available_target_cols + [c for c in cols_to_ignore_for_ai if c in df_encoded.columns]
+            self.ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(columns=cols_to_drop).columns.tolist()
+            self.ALL_OUTPUT_FEATURES_ORDERED = available_target_cols
         except KeyError:
-            print("\n[치명적 오류] target_cols 또는 cols_to_ignore_for_ai에 CSV에 없는 컬럼명이 포함되어 있습니다.")
-            raise # 오류 발생
+            print("\n[치명적 오류] 컬럼 처리 중 문제가 발생했습니다.")
+            raise
 
         X = df_encoded[self.ALL_INPUT_FEATURES_ORDERED].values
         Y = df_encoded[self.ALL_OUTPUT_FEATURES_ORDERED].values
         X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-        X_imputer = KNNImputer(n_neighbors=5); X_train = X_imputer.fit_transform(X_train); X_test = X_imputer.transform(X_test)
-        Y_imputer = KNNImputer(n_neighbors=5); Y_train = Y_imputer.fit_transform(Y_train); Y_test = Y_imputer.transform(Y_test)
+        
+        X_imputer = KNNImputer(n_neighbors=5)
+        X_train = X_imputer.fit_transform(X_train)
+        X_test = X_imputer.transform(X_test)
+        
+        Y_imputer = KNNImputer(n_neighbors=5)
+        Y_train = Y_imputer.fit_transform(Y_train)
+        Y_test = Y_imputer.transform(Y_test)
+        
         self.X_train_scaled = self.X_scaler.fit_transform(X_train)
         self.X_test_scaled = self.X_scaler.transform(X_test)
         self.Y_train_scaled = self.Y_scaler.fit_transform(Y_train)
         self.Y_test_scaled = self.Y_scaler.transform(Y_test)
         self.INPUT_SIZE = self.X_train_scaled.shape[1]
         self.OUTPUT_SIZE = self.Y_train_scaled.shape[1]
-        print(f"AI 모델 입력 피처 수: {self.INPUT_SIZE} (AR 제외)")
-        print(f"AI 모델 출력 피처 수: {self.OUTPUT_SIZE} (SC 포함)")
+        print(f"AI 모델 입력 피처 수: {self.INPUT_SIZE}")
+        print(f"AI 모델 출력 피처 수: {self.OUTPUT_SIZE}")
 
     def _train_model(self):
         """AI 모델을 학습시키고 self.final_model에 저장합니다."""
-        # (이전과 동일)
         print(f"\n--- 2단계: AI 모델 학습 시작 (최대 {self.final_epochs} 에포크, 조기 종료 적용) ---")
         
         X_train_tensor = torch.from_numpy(self.X_train_scaled).float()
@@ -202,11 +220,10 @@ class ALDOptimizer:
         if os.path.exists(self.BEST_MODEL_PATH):
             os.remove(self.BEST_MODEL_PATH); print(f"\n[정리] 임시 모델 파일 ({self.BEST_MODEL_PATH})이 삭제되었습니다.")
 
-    # --- 3. 물리 모델 함수 정의 (SC 전담) ---
+    # --- 3. 물리 모델 함수 정의 (수정됨: Thiele Modulus 적용) ---
     
     @staticmethod
     def _calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
-        # (이전과 동일)
         const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
         d_precursor_m = const["diameter_m"]; T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
         lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
@@ -214,21 +231,67 @@ class ALDOptimizer:
         return lambda_m, Kn
 
     @staticmethod
-    def _calculate_physics_sc(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
-        # (이전과 동일)
+    def _calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
+        """
+        [수정됨] Thiele Modulus 기반 SC 계산
+        
+        1. Pi (phi) = L / sqrt(D_eff * t_pulse)
+        2. if Pi < 1 (Reaction Limited): SC = 1 / (1 + Pi)
+        3. if Pi >= 1 (Diffusion Limited): SC = exp(-Pi)  <-- 기존: exp(-L/lambda_pen)과 동일
+        
+        Returns: (SC_percentage, phi_value, mode_string)
+        """
+        import numpy as np
+
+        # ---- 물성 불러오기 ----
         const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
-        c = const["sticking_c"]; q = const["max_sites_q"]; d_precursor_m = const["diameter_m"]; M_A_kg = const["mass_g_mol"] / 1000.0 / N_A
-        T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322; L_m = AR_value * CD_m
-        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_A_kg)); lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
-        D_A = (1/3) * lambda_m * v_avg; D_Kn = (1/3) * v_avg * CD_m; D_eff = 1 / ((1 / D_A) + (1 / D_Kn))
-        Q = 1 / np.sqrt(2 * np.pi * M_A_kg * k_B * T_K); lambda_D = np.sqrt(D_eff * Pulse_Time_s); L_over_lambda_D = L_m / (lambda_D + 1e-12)
-        constant_term = (c * Q * P_Pa * Pulse_Time_s) / q; theta_0 = 1.0 - np.exp(-constant_term)
-        exp_inner_term = -constant_term * np.exp(-L_over_lambda_D); theta_L = 1.0 - np.exp(exp_inner_term)
-        SC_full_model = theta_L / (theta_0 + 1e-12)
-        return np.clip(SC_full_model * 100.0, 0.0, 100.0)
+        d = const["diameter_m"]
+        M_kg = const["mass_g_mol"] / 1000.0 / N_A
+
+        # ---- 기본 변환 ----
+        T_K = T_celsius + 273.15
+        P_Pa = P_torr * 133.322
+
+        # ---- 채널 길이 L = AR × CD ----
+        L_m = AR_value * CD_m
+
+        # ---- 평균 속도 & 자유행로 ----
+        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg))
+        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
+
+        # ---- 유효확산계수 ----
+        D_A = (1.0 / 3.0) * lambda_m * v_avg
+        D_Kn = (1.0 / 3.0) * v_avg * CD_m
+        D_eff = 1.0 / ((1.0 / (D_A + 1e-30)) + (1.0 / (D_Kn + 1e-30)))
+
+        # ---- 침투 깊이 (lambda_pen) & Thiele Modulus (phi) ----
+        lambda_pen = np.sqrt(D_eff * Pulse_Time_s + 1e-30)
+        
+        # Pi (phi) 정의: L / sqrt(D_eff * t)
+        phi = L_m / (lambda_pen + 1e-30)
+
+        # ---- Step Coverage 계산 (조건부) ----
+        if phi < 1.0:
+            # Reaction Rate Determining Step (Reaction Limited)
+            # SC = 1 / (1 + pi)
+            SC_fraction = 1.0 / (1.0 + phi)
+            mode = "Reaction Limited (RDS, φ < 1)"
+        else:
+            # Diffusion Rate Determining Step (Diffusion Limited)
+            # SC = exp( - L / lambda_pen ) = exp(-phi)
+            SC_fraction = np.exp(-phi)
+            mode = "Diffusion Limited (RDS, φ ≥ 1)"
+
+        return float(np.clip(SC_fraction * 100.0, 0.0, 100.0)), float(phi), mode
+
+    # 최적화 Loop에서 호출되는 래퍼 (값 하나만 리턴)
+    def _calculate_physics_sc(self, P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
+        sc, _, _ = self._calculate_physics_sc_details(
+            P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m
+        )
+        return sc
 
     # --- 4. AI 모델 입/출력 변환기 ---
-    
     def _create_model_input(
         self,
         recipe_params: Dict[str, Any],
@@ -236,7 +299,6 @@ class ALDOptimizer:
         co_reactant_name: str,
         purge_gas_name: str
     ) -> pd.DataFrame:
-        # (이전과 동일)
         input_df = pd.DataFrame(columns=self.ALL_INPUT_FEATURES_ORDERED); input_df.loc[0] = 0.0
         for key, value in recipe_params.items():
             if key in input_df.columns: input_df.at[0, key] = value
@@ -255,7 +317,6 @@ class ALDOptimizer:
         co_reactant_name: str,
         purge_gas_name: str
     ) -> pd.Series:
-        # (이전과 동일)
         input_df = self._create_model_input(recipe_params, precursor_name, co_reactant_name, purge_gas_name)
         X_scaled = self.X_scaler.transform(input_df.values); X_tensor = torch.from_numpy(X_scaled).float()
         self.final_model.eval()
@@ -266,7 +327,7 @@ class ALDOptimizer:
         return predicted_results
 
 
-    # --- 5. 최적화 목적/제약 함수 (수정됨) ---
+    # --- 5. 최적화 목적/제약 함수 ---
 
     def _constraint_sc(
         self,
@@ -277,7 +338,6 @@ class ALDOptimizer:
         cost_weights: Dict[str, float],
         fixed_cycles_n: int 
     ) -> float:
-        # (이전과 동일)
         target_ar = user_input["Target AR"]
         if target_ar <= 5: TARGET_SC_MIN = 98.0
         elif target_ar <= 15: TARGET_SC_MIN = 90.0
@@ -304,7 +364,6 @@ class ALDOptimizer:
         cost_weights: Dict[str, float],
         fixed_cycles_n: int 
     ) -> float:
-        # (이전과 동일)
         recipe_params = {
             "Temperature (c)": x[0],
             "Pressure (torr)": x[1],
@@ -361,9 +420,6 @@ class ALDOptimizer:
         initial_cycles_n = int(round((target_thickness * 10) / self.DEFAULT_GPC_GUESS_A))
         initial_cycles_n = max(10, initial_cycles_n) # 최소 10 사이클 보장
         
-        
-        # 💡 [핵심 수정] '정해진' 초기값을 사용하지 않고 '무작위' 초기값을 생성합니다.
-        
         # 1. 변수 경계 (Bounds) - 5개 변수
         bounds = [
             (150, 400),     # Temperature (c)
@@ -378,7 +434,6 @@ class ALDOptimizer:
             np.random.uniform(low, high) for low, high in bounds
         ]
         
-        # 3. 콘솔에 랜덤 시작점 출력 (터미널/백엔드 로그에 표시됨)
         print(f"\n--- 🔍 '무작위' 탐색 시작점(Initial Guess)을 설정합니다. ---")
         print(f"    {np.round(initial_guess, 3)}")
         
@@ -390,10 +445,10 @@ class ALDOptimizer:
             'args': args
         })
         
-        # 💡 2단계: 5개 변수에 대해 SLSQP 최적화 실행
+        # 2단계: 5개 변수에 대해 SLSQP 최적화 실행
         result = minimize(
             self._objective_function, 
-            initial_guess,  # 💡 [무작위 값] 에서 탐색 시작
+            initial_guess,
             args=args,
             method='SLSQP',
             bounds=bounds,
@@ -433,13 +488,18 @@ class ALDOptimizer:
         final_optimal_cycles_n = max(10, final_optimal_cycles_n)
 
         print(f"\n--- 💡 GPC 기반 Cycles 재계산 ---")
-        print(f"  - AI 예측 최적 GPC: {final_gpc_A:.4f} A/cycle")
-        print(f"  - 목표 두께 {target_thickness} nm 달성을 위한 최종 Cycles: {final_optimal_cycles_n} (n)")
+        print(f"   - AI 예측 최적 GPC: {final_gpc_A:.4f} A/cycle")
+        print(f"   - 목표 두께 {target_thickness} nm 달성을 위한 최종 Cycles: {final_optimal_cycles_n} (n)")
         
         # --- 리포트 생성 ---
         
         T = optimal_x_5_vars[0]; P = optimal_x_5_vars[1]; Pulse_Time = optimal_x_5_vars[2]
-        SC_full_model_value = self._calculate_physics_sc(P, T, Pulse_Time, target_ar, precursor, CD_m)
+        
+        # [수정] 상세 정보(SC, Phi, Mode) 받아오기
+        SC_full_model_value, phi_val, mode_str = self._calculate_physics_sc_details(
+            P, T, Pulse_Time, target_ar, precursor, CD_m
+        )
+        
         lambda_m, Kn = self._calculate_physical_parameters(T, P, precursor, CD_m)
 
         optimal_recipe_report = {
@@ -467,9 +527,12 @@ class ALDOptimizer:
             final_recipe_params_for_report, precursor, co_reactant, purge_gas
         )
         
+        # [수정] Validation Data에 Phi와 Mode 추가
         validation_data = {
-            "Mean Free Path (λ) [m]": f"{lambda_m:.2e}", "Knudsen Number (Kn)": f"{Kn:.2f}",
-            "Sticking Coeff. (c) 사용 ": f"{PRECURSOR_CONSTANTS.get(precursor, PRECURSOR_CONSTANTS['TMA'])['sticking_c']:.3e}",
+            "Mean Free Path (λ) [m]": f"{lambda_m:.2e}", 
+            "Knudsen Number (Kn)": f"{Kn:.2f}",
+            "Thiele Modulus (φ)": f"{phi_val:.4f}",  # 추가됨
+            "Transport Mode": mode_str,              # 추가됨
             "SC (Full Model)": f"{SC_full_model_value:.4f} %",
         }
         
@@ -481,11 +544,10 @@ class ALDOptimizer:
             "Final Cost (fun)": f"{result.fun:.6f}"
         }
         
-        # 💡 [핵심 버그 수정]
         # AI가 예측한 'Thickness (nm)'를 무시하고, 우리가 최적화한 GPC와 Cycles로 '두께'를 역으로 계산하여 덮어씁니다.
         final_calculated_thickness_nm = (final_gpc_A * final_optimal_cycles_n) / 10.0
         predicted_results_for_report['Thickness (nm)'] = final_calculated_thickness_nm
-        print(f"  - 최종 두께 보정: {final_calculated_thickness_nm:.4f} nm (GPC와 Cycles 기반으로 역산)")
+        print(f"   - 최종 두께 보정: {final_calculated_thickness_nm:.4f} nm (GPC와 Cycles 기반으로 역산)")
         
         return optimal_recipe_report, predicted_results_for_report, validation_data, optimization_stats
 
@@ -497,7 +559,6 @@ def initialize_optimizer(file_path):
     """
     ALDOptimizer 객체를 초기화하고 Streamlit 캐시에 저장합니다.
     """
-    # (이전과 동일)
     try:
         optimizer = ALDOptimizer(file_path=file_path)
         return optimizer
@@ -517,7 +578,7 @@ def main_app():
     st.title("✨ AI 기반 ALD 공정 최적화 시스템")
 
     # --- 1. Optimizer 객체 로드 (캐시 사용) ---
-    optimizer = initialize_optimizer(file_path="AI_ALD1.csv.csv")
+    optimizer = initialize_optimizer(file_path="AI_ALD1.csv")
     
     if optimizer is None:
         st.warning("모델이 정상적으로 로드되지 않았습니다. 파일 경로를 확인하세요.")
@@ -579,7 +640,7 @@ def main_app():
 
                 col1, col2 = st.columns(2)
 
-                # --- 결과 리포트 (기존 _print_report 대체) ---
+                # --- 결과 리포트 ---
                 with col1:
                     st.subheader("💡 AI 제안 최적 공정 레시피")
                     recipe_df = pd.DataFrame.from_dict(optimal_recipe, orient='index', columns=['Value'])
@@ -601,7 +662,7 @@ def main_app():
                 st.markdown("---")
                 st.subheader("🔍 핵심 결과 요약")
                 
-                # 두께 검증 (이제 거의 일치해야 함)
+                # 두께 검증
                 pred_thickness = predicted_results.get('Thickness (nm)', 0)
                 st.metric(
                     label=f"두께 검증 (목표: {user_target_input['Thickness (nm)']} nm)",
@@ -613,8 +674,11 @@ def main_app():
                 st.markdown("**[SC 이중 검증 요약]**")
                 sc_ai = predicted_results.get('Step Coverage (sc, %)', 'N/A')
                 sc_phys = validation_data['SC (Full Model)']
-                st.text(f"  - 1. AI 예측 SC: {sc_ai:.4f} % (데이터 기반 학습 결과)")
-                st.text(f"  - 2. 물리 모델 SC: {sc_phys} (최적화 제약조건)")
+                transport_mode = validation_data.get('Transport Mode', 'N/A') # 추가된 모드 정보 표시
+                
+                st.text(f"   - 1. AI 예측 SC: {sc_ai:.4f} % (데이터 기반 학습 결과)")
+                st.text(f"   - 2. 물리 모델 SC: {sc_phys} (최적화 제약조건)")
+                st.info(f"📌 공정 모드: {transport_mode}")
                 
                 st.info(f"최적화 목표 오차 (Cost): {optimization_stats['Final Cost (fun)']} (GPC(x10k), Roughness(x10) 기준)")
 
