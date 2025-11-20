@@ -305,7 +305,6 @@ class ALDOptimizer:
             current_input[target_param_name] = val
             opt_recipe, pred_results, _, _ = self.generate_optimal_recipe(current_input, silent=True)
             
-            # 물리 모델 SC 재계산
             phys_sc = self._calculate_physics_sc(
                 opt_recipe['Pressure (torr)'],
                 opt_recipe['Temperature (c)'],
@@ -356,9 +355,6 @@ def main_cli():
     print("\n[🔬 물리 검증]\n", pd.Series(valid).to_string())
     print(f"\n✅ 최종 두께: {pred['Thickness (nm)']:.4f} nm")
 
-    # --------------------------------------------------
-    # 💡 [CLI 시각화]
-    # --------------------------------------------------
     print("\n" + "="*50 + "\n📊 그래프 시각화 설정 (윈도우 창으로 표시됩니다)\n" + "="*50)
     
     x_options = ["Thickness (nm)", "Target AR"]
@@ -393,7 +389,6 @@ def main_cli():
 
     plt.figure(figsize=(14, 5))
 
-    # Graph 1: Dual Axis Trend
     ax1 = plt.subplot(1, 2, 1)
     line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
     ax1.set_xlabel(f"Target {target_param}")
@@ -411,7 +406,6 @@ def main_cli():
     ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
     ax1.set_title(f"Trend: {y_left} & {y_right}")
 
-    # Graph 2: SC Comparison Trend
     plt.subplot(1, 2, 2)
     plt.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
     plt.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model')
@@ -454,7 +448,7 @@ def main_gui():
         user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
         
         with st.spinner("최적화 진행 중..."):
-            opt_recipe, pred_results, val_data, opt_stats = optimizer.generate_optimal_recipe(user_target_input=user_input)
+            opt_recipe, pred_results, val_data, opt_stats = optimizer.generate_optimal_recipe(user_input=user_input)
 
         st.success("완료!")
         
