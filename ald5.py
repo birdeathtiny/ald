@@ -303,15 +303,13 @@ class ALDOptimizer:
         for val in range_values:
             current_input = base_user_input.copy()
             current_input[target_param_name] = val
+            
+            # 조용히 최적화 실행
             opt_recipe, pred_results, _, _ = self.generate_optimal_recipe(current_input, silent=True)
             
             phys_sc = self._calculate_physics_sc(
-                opt_recipe['Pressure (torr)'],
-                opt_recipe['Temperature (c)'],
-                opt_recipe['Precursor Pulse Time (s)'],
-                current_input['Target AR'],
-                current_input['Precursor'],
-                current_input['CD (nm)'] * 1e-9
+                opt_recipe['Pressure (torr)'], opt_recipe['Temperature (c)'], opt_recipe['Precursor Pulse Time (s)'],
+                current_input['Target AR'], current_input['Precursor'], current_input['CD (nm)'] * 1e-9
             )
 
             row = {target_param_name: val}
@@ -323,7 +321,7 @@ class ALDOptimizer:
 
 
 # ==========================================
-# 🖥️ 1. CLI 모드 실행 함수 (터미널 + Matplotlib 창)
+# 🖥️ 1. CLI 모드 실행 함수 (터미널)
 # ==========================================
 def main_cli():
     print("\n" + "="*50 + "\n  [CLI 모드] AI 기반 ALD 공정 최적화 (터미널)\n" + "="*50)
@@ -355,78 +353,64 @@ def main_cli():
     print("\n[🔬 물리 검증]\n", pd.Series(valid).to_string())
     print(f"\n✅ 최종 두께: {pred['Thickness (nm)']:.4f} nm")
 
+    # --- CLI 시각화 ---
     print("\n" + "="*50 + "\n📊 그래프 시각화 설정 (윈도우 창으로 표시됩니다)\n" + "="*50)
-    
     x_options = ["Thickness (nm)", "Target AR"]
     print("[1] X축 (변화시킬 목표값) 선택:")
     for i, opt in enumerate(x_options, 1): print(f"  {i}. {opt}")
-    try:
-        x_idx = int(input("  => 번호를 입력하세요 (기본 1): ")) - 1
-        target_param = x_options[x_idx] if 0 <= x_idx < len(x_options) else x_options[0]
-    except: target_param = x_options[0]
+    try: x_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
+    except: x_idx = 0
+    target_param = x_options[x_idx] if 0 <= x_idx < len(x_options) else x_options[0]
 
-    y_left_options = ["Temperature (c)", "Pressure (torr)", "Precursor Pulse Time (s)", "Purge Time (s)", "Cycles (n)"]
-    print("\n[2] 왼쪽 Y축 (확인할 최적 공정 조건) 선택:")
-    for i, opt in enumerate(y_left_options, 1): print(f"  {i}. {opt}")
-    try:
-        yl_idx = int(input("  => 번호를 입력하세요 (기본 1): ")) - 1
-        y_left = y_left_options[yl_idx] if 0 <= yl_idx < len(y_left_options) else y_left_options[0]
-    except: y_left = y_left_options[0]
+    y_left_opts = ["Temperature (c)", "Pressure (torr)", "Precursor Pulse Time (s)", "Purge Time (s)", "Cycles (n)"]
+    print("\n[2] 왼쪽 Y축 (최적 공정 조건) 선택:")
+    for i, opt in enumerate(y_left_opts, 1): print(f"  {i}. {opt}")
+    try: yl_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
+    except: yl_idx = 0
+    y_left = y_left_opts[yl_idx] if 0 <= yl_idx < len(y_left_opts) else y_left_opts[0]
 
-    y_right_options = ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"]
-    print("\n[3] 오른쪽 Y축 (확인할 예측 물성) 선택:")
-    for i, opt in enumerate(y_right_options, 1): print(f"  {i}. {opt}")
-    try:
-        yr_idx = int(input("  => 번호를 입력하세요 (기본 1): ")) - 1
-        y_right = y_right_options[yr_idx] if 0 <= yr_idx < len(y_right_options) else y_right_options[0]
-    except: y_right = y_right_options[0]
+    y_right_opts = ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"]
+    print("\n[3] 오른쪽 Y축 (예측 물성) 선택:")
+    for i, opt in enumerate(y_right_opts, 1): print(f"  {i}. {opt}")
+    try: yr_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
+    except: yr_idx = 0
+    y_right = y_right_opts[yr_idx] if 0 <= yr_idx < len(y_right_opts) else y_right_opts[0]
 
-    print(f"\n📈 '{target_param}' 변화에 따른 '{y_left}'(좌) 및 '{y_right}'(우) 변화를 계산 중입니다...")
+    print(f"\n📈 '{target_param}' 변화에 따른 시뮬레이션 진행 중...")
     
-    current_val = user_input[target_param]
-    sweep_range = np.linspace(current_val * 0.5, current_val * 1.5, 10)
+    cur_val = user_input[target_param]
+    sweep_range = np.linspace(cur_val * 0.5, cur_val * 1.5, 10)
     sweep_df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
 
     plt.figure(figsize=(14, 5))
 
+    # Graph 1
     ax1 = plt.subplot(1, 2, 1)
     line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
-    ax1.set_xlabel(f"Target {target_param}")
-    ax1.set_ylabel(f"Optimal {y_left}", color='r')
-    ax1.tick_params(axis='y', labelcolor='r')
-    ax1.grid(True, linestyle='--', alpha=0.5)
-
+    ax1.set_xlabel(f"Target {target_param}"); ax1.set_ylabel(f"Optimal {y_left}", color='r')
+    ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
     ax2 = ax1.twinx()
     line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Property: {y_right}")
-    ax2.set_ylabel(f"Predicted {y_right}", color='b')
-    ax2.tick_params(axis='y', labelcolor='b')
-
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
+    ax2.set_ylabel(f"Predicted {y_right}", color='b'); ax2.tick_params(axis='y', labelcolor='b')
+    lines = line1 + line2; labels = [l.get_label() for l in lines]
     ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
     ax1.set_title(f"Trend: {y_left} & {y_right}")
 
+    # Graph 2
     plt.subplot(1, 2, 2)
     plt.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
     plt.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model')
-    plt.xlabel(f"Target {target_param}")
-    plt.ylabel("Step Coverage (%)")
-    plt.ylim(0, 110)
-    plt.title(f"SC Trend: AI vs Physics (vs {target_param})")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.xlabel(f"Target {target_param}"); plt.ylabel("Step Coverage (%)"); plt.ylim(0, 110)
+    plt.title(f"SC Trend: AI vs Physics")
+    plt.legend(); plt.grid(True, linestyle='--', alpha=0.6)
 
     plt.tight_layout()
-    try:
-        plt.show()
-        print("   (그래프 창을 닫으면 프로그램이 종료됩니다)")
-    except Exception as e:
-        print(f"\n⚠️ 그래프 팝업 불가 ({e})")
-        plt.savefig('result_graph.png')
+    try: plt.show(); print("   (그래프 창을 닫으면 종료됩니다)")
+    except Exception as e: print(f"\n⚠️ 그래프 팝업 불가: {e}"); plt.savefig('result_graph.png')
 
 
 # ==========================================
-# 🌐 2. GUI 모드 실행 함수 (Streamlit 웹)
+# 🌐 2. GUI 모드 실행 함수 (Streamlit)
 # ==========================================
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
@@ -444,12 +428,33 @@ def main_gui():
     ar = st.sidebar.number_input("목표 AR", 1.0, 100.0, 10.0)
     cd = st.sidebar.number_input("CD (nm)", 1.0, 500.0, 100.0)
 
+    # 💡 [핵심 수정] Session State 초기화 (재실행 시 데이터 유지)
+    if 'opt_done' not in st.session_state:
+        st.session_state['opt_done'] = False
+        st.session_state['opt_recipe'] = None
+        st.session_state['pred_results'] = None
+        st.session_state['val_data'] = None
+        st.session_state['opt_stats'] = None
+        st.session_state['user_input'] = None
+
     if st.button("🚀 최적 레시피 생성", type="primary"):
         user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        
         with st.spinner("최적화 진행 중..."):
-            opt_recipe, pred_results, val_data, opt_stats = optimizer.generate_optimal_recipe(user_input=user_input)
+            # 결과 저장
+            rec, pred, val, stats = optimizer.generate_optimal_recipe(user_input=user_input)
+            st.session_state['opt_recipe'] = rec
+            st.session_state['pred_results'] = pred
+            st.session_state['val_data'] = val
+            st.session_state['opt_stats'] = stats
+            st.session_state['user_input'] = user_input
+            st.session_state['opt_done'] = True
 
+    # 💡 결과가 있으면 화면 표시 (버튼 안 눌러도 유지됨)
+    if st.session_state['opt_done']:
+        opt_recipe = st.session_state['opt_recipe']
+        pred_results = st.session_state['pred_results']
+        val_data = st.session_state['val_data']
+        
         st.success("완료!")
         
         tab1, tab2 = st.tabs(["📄 결과 리포트", "📊 최적화 경향 분석"])
@@ -464,60 +469,56 @@ def main_gui():
             with c2:
                 st.subheader("📈 예측 물성")
                 st.dataframe(pred_results.to_frame(name='Predicted'))
-                st.metric("두께 검증", f"{pred_results['Thickness (nm)']:.2f} nm", delta=f"{pred_results['Thickness (nm)'] - th:.2f} nm")
+                st.metric("두께 검증", f"{pred_results['Thickness (nm)']:.2f} nm", 
+                          delta=f"{pred_results['Thickness (nm)'] - st.session_state['user_input']['Thickness (nm)']:.2f} nm")
 
         with tab2:
             st.header("📊 최적 공정 경향 분석")
             
-            col_sel1, col_sel2, col_sel3 = st.columns(3)
-            with col_sel1:
-                target_param = st.selectbox("1. X축: 목표값", ["Thickness (nm)", "Target AR"])
-            with col_sel2:
-                y_left = st.selectbox("2. 왼쪽 Y축: 공정 조건", ["Temperature (c)", "Pressure (torr)", "Precursor Pulse Time (s)", "Purge Time (s)", "Cycles (n)"])
-            with col_sel3:
-                y_right = st.selectbox("3. 오른쪽 Y축: 예측 물성", ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"])
+            col1, col2, col3 = st.columns(3)
+            with col1: target_param = st.selectbox("1. X축: 목표값", ["Thickness (nm)", "Target AR"])
+            with col2: y_left = st.selectbox("2. 왼쪽 Y축: 공정 조건", ["Temperature (c)", "Pressure (torr)", "Precursor Pulse Time (s)", "Purge Time (s)", "Cycles (n)"])
+            with col3: y_right = st.selectbox("3. 오른쪽 Y축: 예측 물성", ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"])
 
-            current_val = user_input[target_param]
-            sweep_range = np.linspace(current_val * 0.5, current_val * 1.5, 10) 
+            curr_val = st.session_state['user_input'][target_param]
+            sweep_range = np.linspace(curr_val * 0.5, curr_val * 1.5, 10)
             
-            with st.spinner("시뮬레이션 진행 중..."):
-                sweep_df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
-
-            # Graph 1: Dual Axis
-            fig, ax1 = plt.subplots(figsize=(10, 5))
-            line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
-            ax1.set_xlabel(f"Target {target_param}")
-            ax1.set_ylabel(f"Optimal {y_left}", color='r')
-            ax1.tick_params(axis='y', labelcolor='r')
-            ax1.grid(True, linestyle='--', alpha=0.5)
+            # 시각화용 데이터 생성 (이미 로드된 optimizer 사용)
+            if st.button("🔄 그래프 업데이트"):
+                 with st.spinner("시뮬레이션 중..."):
+                    sweep_df = optimizer.simulate_target_sweep(st.session_state['user_input'], target_param, sweep_range)
+                    st.session_state['sweep_df'] = sweep_df # 이것도 저장
             
-            ax2 = ax1.twinx()
-            line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Property: {y_right}")
-            ax2.set_ylabel(f"Predicted {y_right}", color='b')
-            ax2.tick_params(axis='y', labelcolor='b')
+            if 'sweep_df' in st.session_state:
+                sweep_df = st.session_state['sweep_df']
+                
+                fig, ax1 = plt.subplots(figsize=(10, 5))
+                line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
+                ax1.set_xlabel(f"Target {target_param}"); ax1.set_ylabel(f"Optimal {y_left}", color='r')
+                ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
+                
+                ax2 = ax1.twinx()
+                line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Property: {y_right}")
+                ax2.set_ylabel(f"Predicted {y_right}", color='b'); ax2.tick_params(axis='y', labelcolor='b')
+                
+                lines = line1 + line2; labels = [l.get_label() for l in lines]
+                ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
+                st.pyplot(fig)
 
-            lines = line1 + line2
-            labels = [l.get_label() for l in lines]
-            ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
-            st.pyplot(fig)
-
-            # Graph 2: SC Trend Comparison
-            st.divider()
-            st.subheader(f"⚖️ Step Coverage Trend: AI vs Physics (vs {target_param})")
-            
-            fig2, ax_sc = plt.subplots(figsize=(10, 4))
-            ax_sc.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
-            ax_sc.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model')
-            ax_sc.set_xlabel(f"Target {target_param}")
-            ax_sc.set_ylabel("Step Coverage (%)")
-            ax_sc.set_ylim(0, 110)
-            ax_sc.legend()
-            ax_sc.grid(True, linestyle='--', alpha=0.5)
-            st.pyplot(fig2)
+                st.divider()
+                st.subheader(f"⚖️ Step Coverage Trend (vs {target_param})")
+                fig2, ax_sc = plt.subplots(figsize=(10, 4))
+                ax_sc.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
+                ax_sc.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model')
+                ax_sc.set_xlabel(f"Target {target_param}"); ax_sc.set_ylabel("Step Coverage (%)"); ax_sc.set_ylim(0, 110)
+                ax_sc.legend(); ax_sc.grid(True, linestyle='--', alpha=0.5)
+                st.pyplot(fig2)
+            else:
+                st.info("👆 '그래프 업데이트' 버튼을 눌러 시각화를 시작하세요.")
 
 
 # ==========================================
-# 🚦 3. 실행 모드 자동 감지 (최종)
+# 🚦 3. 실행 모드 자동 감지
 # ==========================================
 if __name__ == "__main__":
     try:
