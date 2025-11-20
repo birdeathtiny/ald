@@ -303,15 +303,12 @@ class ALDOptimizer:
         for val in range_values:
             current_input = base_user_input.copy()
             current_input[target_param_name] = val
-            
-            # 조용히 최적화 실행
             opt_recipe, pred_results, _, _ = self.generate_optimal_recipe(current_input, silent=True)
             
             phys_sc = self._calculate_physics_sc(
                 opt_recipe['Pressure (torr)'], opt_recipe['Temperature (c)'], opt_recipe['Precursor Pulse Time (s)'],
                 current_input['Target AR'], current_input['Precursor'], current_input['CD (nm)'] * 1e-9
             )
-
             row = {target_param_name: val}
             row.update(opt_recipe)
             row.update(pred_results.to_dict())
@@ -321,7 +318,7 @@ class ALDOptimizer:
 
 
 # ==========================================
-# 🖥️ 1. CLI 모드 실행 함수 (터미널)
+# 🖥️ 1. CLI 모드 실행 함수
 # ==========================================
 def main_cli():
     print("\n" + "="*50 + "\n  [CLI 모드] AI 기반 ALD 공정 최적화 (터미널)\n" + "="*50)
@@ -353,7 +350,7 @@ def main_cli():
     print("\n[🔬 물리 검증]\n", pd.Series(valid).to_string())
     print(f"\n✅ 최종 두께: {pred['Thickness (nm)']:.4f} nm")
 
-    # --- CLI 시각화 ---
+    # CLI 시각화
     print("\n" + "="*50 + "\n📊 그래프 시각화 설정 (윈도우 창으로 표시됩니다)\n" + "="*50)
     x_options = ["Thickness (nm)", "Target AR"]
     print("[1] X축 (변화시킬 목표값) 선택:")
@@ -377,14 +374,11 @@ def main_cli():
     y_right = y_right_opts[yr_idx] if 0 <= yr_idx < len(y_right_opts) else y_right_opts[0]
 
     print(f"\n📈 '{target_param}' 변화에 따른 시뮬레이션 진행 중...")
-    
     cur_val = user_input[target_param]
     sweep_range = np.linspace(cur_val * 0.5, cur_val * 1.5, 10)
     sweep_df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
 
     plt.figure(figsize=(14, 5))
-
-    # Graph 1
     ax1 = plt.subplot(1, 2, 1)
     line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
     ax1.set_xlabel(f"Target {target_param}"); ax1.set_ylabel(f"Optimal {y_left}", color='r')
@@ -396,7 +390,6 @@ def main_cli():
     ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
     ax1.set_title(f"Trend: {y_left} & {y_right}")
 
-    # Graph 2
     plt.subplot(1, 2, 2)
     plt.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
     plt.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model')
@@ -428,7 +421,7 @@ def main_gui():
     ar = st.sidebar.number_input("목표 AR", 1.0, 100.0, 10.0)
     cd = st.sidebar.number_input("CD (nm)", 1.0, 500.0, 100.0)
 
-    # 💡 [핵심 수정] Session State 초기화 (재실행 시 데이터 유지)
+    # Session State 초기화
     if 'opt_done' not in st.session_state:
         st.session_state['opt_done'] = False
         st.session_state['opt_recipe'] = None
@@ -440,7 +433,7 @@ def main_gui():
     if st.button("🚀 최적 레시피 생성", type="primary"):
         user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
         with st.spinner("최적화 진행 중..."):
-            # 결과 저장
+            # 💡 [수정] user_target_input -> user_input으로 변경
             rec, pred, val, stats = optimizer.generate_optimal_recipe(user_input=user_input)
             st.session_state['opt_recipe'] = rec
             st.session_state['pred_results'] = pred
@@ -449,7 +442,6 @@ def main_gui():
             st.session_state['user_input'] = user_input
             st.session_state['opt_done'] = True
 
-    # 💡 결과가 있으면 화면 표시 (버튼 안 눌러도 유지됨)
     if st.session_state['opt_done']:
         opt_recipe = st.session_state['opt_recipe']
         pred_results = st.session_state['pred_results']
@@ -483,36 +475,40 @@ def main_gui():
             curr_val = st.session_state['user_input'][target_param]
             sweep_range = np.linspace(curr_val * 0.5, curr_val * 1.5, 10)
             
-            # 시각화용 데이터 생성 (이미 로드된 optimizer 사용)
             if st.button("🔄 그래프 업데이트"):
                  with st.spinner("시뮬레이션 중..."):
                     sweep_df = optimizer.simulate_target_sweep(st.session_state['user_input'], target_param, sweep_range)
-                    st.session_state['sweep_df'] = sweep_df # 이것도 저장
+                    st.session_state['sweep_df'] = sweep_df 
             
             if 'sweep_df' in st.session_state:
                 sweep_df = st.session_state['sweep_df']
                 
-                fig, ax1 = plt.subplots(figsize=(10, 5))
-                line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
-                ax1.set_xlabel(f"Target {target_param}"); ax1.set_ylabel(f"Optimal {y_left}", color='r')
-                ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
-                
-                ax2 = ax1.twinx()
-                line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Property: {y_right}")
-                ax2.set_ylabel(f"Predicted {y_right}", color='b'); ax2.tick_params(axis='y', labelcolor='b')
-                
-                lines = line1 + line2; labels = [l.get_label() for l in lines]
-                ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
-                st.pyplot(fig)
+                # 💡 [안전장치] 만약 이전 데이터(다른 X축)가 남아있다면 그래프를 그리지 않거나 경고
+                if target_param not in sweep_df.columns:
+                    st.warning(f"⚠️ 설정이 '{target_param}'으로 변경되었습니다. 위의 '🔄 그래프 업데이트' 버튼을 눌러주세요.")
+                else:
+                    fig, ax1 = plt.subplots(figsize=(10, 5))
+                    line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
+                    ax1.set_xlabel(f"Target {target_param}")
+                    ax1.set_ylabel(f"Optimal {y_left}", color='r')
+                    ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
+                    
+                    ax2 = ax1.twinx()
+                    line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Property: {y_right}")
+                    ax2.set_ylabel(f"Predicted {y_right}", color='b'); ax2.tick_params(axis='y', labelcolor='b')
+                    
+                    lines = line1 + line2; labels = [l.get_label() for l in lines]
+                    ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
+                    st.pyplot(fig)
 
-                st.divider()
-                st.subheader(f"⚖️ Step Coverage Trend (vs {target_param})")
-                fig2, ax_sc = plt.subplots(figsize=(10, 4))
-                ax_sc.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
-                ax_sc.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model')
-                ax_sc.set_xlabel(f"Target {target_param}"); ax_sc.set_ylabel("Step Coverage (%)"); ax_sc.set_ylim(0, 110)
-                ax_sc.legend(); ax_sc.grid(True, linestyle='--', alpha=0.5)
-                st.pyplot(fig2)
+                    st.divider()
+                    st.subheader(f"⚖️ Step Coverage Trend (vs {target_param})")
+                    fig2, ax_sc = plt.subplots(figsize=(10, 4))
+                    ax_sc.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
+                    ax_sc.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model')
+                    ax_sc.set_xlabel(f"Target {target_param}"); ax_sc.set_ylabel("Step Coverage (%)"); ax_sc.set_ylim(0, 110)
+                    ax_sc.legend(); ax_sc.grid(True, linestyle='--', alpha=0.5)
+                    st.pyplot(fig2)
             else:
                 st.info("👆 '그래프 업데이트' 버튼을 눌러 시각화를 시작하세요.")
 
