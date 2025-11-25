@@ -304,7 +304,6 @@ class ALDOptimizer:
             current_input = base_user_input.copy()
             current_input[target_param_name] = val
             opt_recipe, pred_results, _, _ = self.generate_optimal_recipe(current_input, silent=True)
-            
             phys_sc = self._calculate_physics_sc(
                 opt_recipe['Pressure (torr)'], opt_recipe['Temperature (c)'], opt_recipe['Precursor Pulse Time (s)'],
                 current_input['Target AR'], current_input['Precursor'], current_input['CD (nm)'] * 1e-9
@@ -318,7 +317,7 @@ class ALDOptimizer:
 
 
 # ==========================================
-# 🖥️ 1. CLI 모드 실행 함수
+# 🖥️ CLI 모드 실행 함수 (python app.py)
 # ==========================================
 def main_cli():
     print("\n" + "="*50 + "\n  [CLI 모드] AI 기반 ALD 공정 최적화 (터미널)\n" + "="*50)
@@ -327,7 +326,7 @@ def main_cli():
     try: matplotlib.use('TkAgg')
     except: pass 
 
-    csv_file = "AI_ALD1.csv" 
+    csv_file = "AI_ALD1.csv" # 💡 파일명 확인
     if not os.path.exists(csv_file):
         print(f"[오류] '{csv_file}' 파일이 없습니다."); return
     
@@ -350,7 +349,7 @@ def main_cli():
     print("\n[🔬 물리 검증]\n", pd.Series(valid).to_string())
     print(f"\n✅ 최종 두께: {pred['Thickness (nm)']:.4f} nm")
 
-    # CLI 시각화
+    # CLI 시각화 (Dual Axis + SC Comparison)
     print("\n" + "="*50 + "\n📊 그래프 시각화 설정 (윈도우 창으로 표시됩니다)\n" + "="*50)
     x_options = ["Thickness (nm)", "Target AR"]
     print("[1] X축 (변화시킬 목표값) 선택:")
@@ -403,14 +402,14 @@ def main_cli():
 
 
 # ==========================================
-# 🌐 2. GUI 모드 실행 함수 (Streamlit)
+# 🌐 GUI 모드 실행 함수 (Streamlit 웹)
 # ==========================================
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     st.title("✨ AI 기반 ALD 공정 최적화 시스템")
 
     @st.cache_resource(show_spinner="AI 모델 로딩 중...")
-    def load_optimizer(): return ALDOptimizer(file_path="AI_ALD1.csv", mode="gui") 
+    def load_optimizer(): return ALDOptimizer(file_path="AI_ALD1.csv", mode="gui") # 💡 파일명 확인
 
     try: optimizer = load_optimizer()
     except Exception as e: st.error(f"모델 로드 실패: {e}"); st.stop()
@@ -433,7 +432,6 @@ def main_gui():
     if st.button("🚀 최적 레시피 생성", type="primary"):
         user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
         with st.spinner("최적화 진행 중..."):
-            # 💡 [수정] user_target_input -> user_input으로 변경
             rec, pred, val, stats = optimizer.generate_optimal_recipe(user_input=user_input)
             st.session_state['opt_recipe'] = rec
             st.session_state['pred_results'] = pred
@@ -448,7 +446,6 @@ def main_gui():
         val_data = st.session_state['val_data']
         
         st.success("완료!")
-        
         tab1, tab2 = st.tabs(["📄 결과 리포트", "📊 최적화 경향 분석"])
 
         with tab1:
@@ -466,7 +463,6 @@ def main_gui():
 
         with tab2:
             st.header("📊 최적 공정 경향 분석")
-            
             col1, col2, col3 = st.columns(3)
             with col1: target_param = st.selectbox("1. X축: 목표값", ["Thickness (nm)", "Target AR"])
             with col2: y_left = st.selectbox("2. 왼쪽 Y축: 공정 조건", ["Temperature (c)", "Pressure (torr)", "Precursor Pulse Time (s)", "Purge Time (s)", "Cycles (n)"])
@@ -482,21 +478,16 @@ def main_gui():
             
             if 'sweep_df' in st.session_state:
                 sweep_df = st.session_state['sweep_df']
-                
-                # 💡 [안전장치] 만약 이전 데이터(다른 X축)가 남아있다면 그래프를 그리지 않거나 경고
                 if target_param not in sweep_df.columns:
-                    st.warning(f"⚠️ 설정이 '{target_param}'으로 변경되었습니다. 위의 '🔄 그래프 업데이트' 버튼을 눌러주세요.")
+                    st.warning(f"⚠️ X축이 '{target_param}'으로 변경되었습니다. '🔄 그래프 업데이트' 버튼을 눌러주세요.")
                 else:
                     fig, ax1 = plt.subplots(figsize=(10, 5))
                     line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
-                    ax1.set_xlabel(f"Target {target_param}")
-                    ax1.set_ylabel(f"Optimal {y_left}", color='r')
+                    ax1.set_xlabel(f"Target {target_param}"); ax1.set_ylabel(f"Optimal {y_left}", color='r')
                     ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
-                    
                     ax2 = ax1.twinx()
                     line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Property: {y_right}")
                     ax2.set_ylabel(f"Predicted {y_right}", color='b'); ax2.tick_params(axis='y', labelcolor='b')
-                    
                     lines = line1 + line2; labels = [l.get_label() for l in lines]
                     ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
                     st.pyplot(fig)
@@ -514,7 +505,7 @@ def main_gui():
 
 
 # ==========================================
-# 🚦 3. 실행 모드 자동 감지
+# 🚦 실행 모드 자동 감지
 # ==========================================
 if __name__ == "__main__":
     try:
