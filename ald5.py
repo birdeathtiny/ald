@@ -36,7 +36,7 @@ class ALDOptimizer:
     def __init__(self, file_path: str, mode: str = "cli"):
         self.mode = mode
         if self.mode == "cli":
-            print(f"--- [Fast Auto-Tuning] 데이터 로드 및 스마트 학습 시작 ---")
+            print(f"--- [Smart Tuning Mode] 데이터 로드 및 스마트 학습 시작 ---")
         
         self.DEFAULT_GPC_GUESS_A = 1.0 
         self.X_scaler = StandardScaler()
@@ -53,8 +53,8 @@ class ALDOptimizer:
         # 2. 데이터셋 준비
         self._prepare_datasets(df_encoded)
         
-        # 3. 모델 학습 (싱글 타겟 튜닝으로 속도 극대화)
-        self._train_model_smart_tuning()
+        # 3. 모델 학습 (스마트 튜닝: 대표 타겟으로 파라미터 찾기)
+        self._train_model_smart()
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -123,48 +123,44 @@ class ALDOptimizer:
         self.Y_test_scaled = self.Y_scaler.transform(self.Y_test)
 
         if self.mode == "cli":
-            print(f"✅ 데이터 로드 완료")
+            print(f"✅ 데이터 로드 완료 (입력: {X.shape[1]}개, 출력: {Y.shape[1]}개)")
 
-    def _train_model_smart_tuning(self):
+    def _train_model_smart(self):
         """
-        [Speed-Up Logic]
-        9개 타겟을 모두 튜닝하면 9배 느려집니다.
-        가장 중요한 'Thickness(두께)' 데이터(Index 0)만 가지고 최적 파라미터를 찾은 뒤,
-        그 파라미터를 전체 모델에 적용합니다. -> 속도 9배 향상
+        [Smart Tuning]
+        전체 타겟을 다 튜닝하면 느립니다. 
+        대표 타겟(Thickness) 하나로 최적 파라미터를 찾고(약 3초), 전체 모델에 적용합니다.
         """
-        if self.mode == "cli": 
-            print("--- 🧠 AI 실시간 최적화 수행 중 (약 2~3초 소요)... ---")
+        if self.mode == "cli": print("--- 🧠 AI가 최적의 파라미터를 탐색 중입니다 (약 3~5초 소요)... ---")
         
         param_dist = {
-            'n_estimators': [200, 300, 500],          
-            'learning_rate': [0.05, 0.1, 0.2],        
-            'max_depth': [4, 5, 6],                   
-            'subsample': [0.8, 0.9],                  
-            'colsample_bytree': [0.8, 0.9]            
+            'n_estimators': [200, 400, 600],
+            'learning_rate': [0.03, 0.05, 0.1],
+            'max_depth': [4, 5, 6],
+            'subsample': [0.7, 0.8],
+            'colsample_bytree': [0.7, 0.8]
         }
         
-        # 1. 대표 타겟(두께)으로만 튜닝 (매우 빠름)
+        # 1. 대표 타겟(0번: Thickness)으로만 튜닝 -> 속도 9배 향상
         search = RandomizedSearchCV(
             estimator=xgb.XGBRegressor(n_jobs=-1, random_state=42),
             param_distributions=param_dist,
-            n_iter=10,  # 10번 실험
-            cv=2,       # 2번 검증
+            n_iter=10,   # 10번 실험 (충분함)
+            cv=2,        # 2-Fold 검증
             scoring='neg_mean_squared_error',
             verbose=0,
             random_state=42,
             n_jobs=-1
         )
         
-        # Thickness(0번 인덱스)만 사용하여 튜닝
-        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0])
-        
+        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0]) 
         self.best_params = search.best_params_
         
         if self.mode == "cli":
             print(f"✨ 최적 파라미터 발견: {self.best_params}")
             print("--- 🤖 전체 모델 학습 적용 중... ---")
         
-        # 2. 찾은 파라미터로 전체 학습 (MultiOutput)
+        # 2. 찾은 파라미터로 전체 타겟 학습
         self.model = MultiOutputRegressor(xgb.XGBRegressor(**self.best_params, n_jobs=-1, random_state=42))
         self.model.fit(self.X_train_scaled, self.Y_train_scaled)
         
@@ -185,7 +181,7 @@ class ALDOptimizer:
         self.performance_df = pd.DataFrame({'RMSE': RMSE_dict, 'R^2': R2_dict})
         
         if self.mode == "cli":
-            print(f"✅ 학습 완료 | R2 Score: {r2:.4f}")
+            print(f"✅ 학습 완료 | 평균 R2 Score: {r2:.4f}")
 
     # --- 물리 모델 (SC) ---
     @staticmethod
@@ -333,7 +329,6 @@ def main_cli():
     
     optimizer = ALDOptimizer(file_path=csv_file, mode="cli")
     print(f"📊 모델 정확도 (R2): {optimizer.performance_metrics['R2']:.4f}")
-    print(f"✨ 탐색된 최적 파라미터: {optimizer.best_params}")
 
     try:
         p_list = ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"]
@@ -353,6 +348,7 @@ def main_cli():
     print("\n📈 예측 물성:\n{pred.to_string()}")
     print("-" * 30)
 
+    # 시각화
     print("\n📊 [시각화] 목표값 변화에 따른 경향 분석")
     x_opts = ["Thickness (nm)", "Target AR"]
     print(f"1. {x_opts[0]}  2. {x_opts[1]}")
@@ -365,7 +361,7 @@ def main_cli():
     sweep_range = np.linspace(curr * 0.5, curr * 1.5, 10)
     df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
 
-    plt.figure(figsize=(12, 5))
+    plt.figure(figsize=(14, 5))
     ax1 = plt.subplot(1, 2, 1)
     l1 = ax1.plot(df[target_param], df["Temperature (c)"], 'r-o', label="Temp (c)")
     ax1.set_xlabel(target_param); ax1.set_ylabel("Temp (c)", color='r')
@@ -382,8 +378,8 @@ def main_cli():
     plt.legend(); plt.title("Step Coverage Trend")
     
     plt.tight_layout()
-    try: plt.show()
-    except: print("⚠️ 팝업 불가. result.png 저장"); plt.savefig("result.png")
+    try: plt.show(); print("   (그래프 창을 닫으면 종료됩니다)")
+    except Exception as e: print(f"\n⚠️ 그래프 팝업 불가: {e}"); plt.savefig('result_graph.png')
 
 
 # ==========================================
@@ -391,9 +387,9 @@ def main_cli():
 # ==========================================
 def main_gui():
     st.set_page_config(page_title="ALD Optimizer", layout="wide")
-    st.title("🚀 AI 기반 ALD 공정 최적화 시스템 (Smart Tuning)")
+    st.title("🚀 AI 기반 ALD 공정 최적화 시스템")
 
-    @st.cache_resource(show_spinner="AI 모델 스마트 튜닝 중... (2~3초)")
+    @st.cache_resource(show_spinner="AI 모델 스마트 튜닝 중 (약 3초)...")
     def load_model():
         csv_file_name = "AI_ALD1.csv"
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -472,11 +468,11 @@ def main_gui():
                     st.warning("⚠️ 설정이 변경되었습니다. 업데이트 버튼을 눌러주세요.")
                 else:
                     fig, ax1 = plt.subplots(figsize=(10, 4))
-                    ax1.plot(df[target], df[y1], 'r-o', label=y1)
+                    ax1.plot(df[target], df[y1], 'r-o', label=f"Recipe: {y_left}")
                     ax1.set_ylabel(y1, color='r'); ax1.tick_params(axis='y', labelcolor='r')
                     
                     ax2 = ax1.twinx()
-                    ax2.plot(df[target], df[y2], 'b--s', label=y2)
+                    ax2.plot(df[target], df[y2], 'b--s', label=f"Property: {y_right}")
                     ax2.set_ylabel(y2, color='b'); ax2.tick_params(axis='y', labelcolor='b')
                     
                     lines = ax1.get_lines() + ax2.get_lines()
