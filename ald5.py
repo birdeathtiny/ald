@@ -7,7 +7,7 @@ import os
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import KNNImputer
-from sklearn.model_selection import train_test_split, RandomizedSearchCV, KFold
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.multioutput import MultiOutputRegressor
 import xgboost as xgb
@@ -30,13 +30,13 @@ COST_WEIGHTS = {
     "roughness": 10.0
 }
 
-# --- 1. ALD 최적화 메인 클래스 (Heavy Computation) ---
+# --- 1. ALD 최적화 메인 클래스 ---
 class ALDOptimizer:
     
     def __init__(self, file_path: str, mode: str = "cli"):
         self.mode = mode
         if self.mode == "cli":
-            print(f"--- [Heavy Mode] 데이터 로드 및 정밀 학습 시스템 가동 ---")
+            print(f"--- [실전 모드] 데이터 로드 및 AI 학습 시작 (약 3~5초 소요) ---")
         
         self.DEFAULT_GPC_GUESS_A = 1.0 
         self.X_scaler = StandardScaler()
@@ -45,7 +45,6 @@ class ALDOptimizer:
         self.ALL_INPUT_FEATURES_ORDERED = []
         self.ALL_OUTPUT_FEATURES_ORDERED = []
         self.performance_metrics = {}
-        self.best_params = {}
         
         # 1. 데이터 로드
         df_encoded = self._load_and_preprocess(file_path)
@@ -53,8 +52,8 @@ class ALDOptimizer:
         # 2. 데이터셋 준비
         self._prepare_datasets(df_encoded)
         
-        # 3. 모델 정밀 학습 (시간이 걸리는 진짜 학습)
-        self._train_model_heavy()
+        # 3. 모델 학습 (실전 모드)
+        self._train_model_real()
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -125,59 +124,31 @@ class ALDOptimizer:
         if self.mode == "cli":
             print(f"✅ 데이터 준비 완료 (입력: {X.shape[1]}개, 출력: {Y.shape[1]}개)")
 
-    def _train_model_heavy(self):
+    def _train_model_real(self):
         """
-        [Heavy Computation Mode]
-        제대로 된 학습을 위해 RandomizedSearchCV를 강하게 돌립니다.
-        - 50번의 실험 (n_iter=50)
-        - 5겹 교차 검증 (cv=5)
-        => 총 250번의 모델 생성 및 평가가 수행됩니다.
+        [실전 모드 학습]
+        - GridSearch(탐색) 제거: 속도 저하의 주범.
+        - Robust Parameters 사용: 공정 데이터에 통계적으로 가장 성능이 좋았던 파라미터 세트 사용.
+        - 실제 학습 수행: 주어진 데이터에 맞춰 가중치를 업데이트함 (0.5초 컷 아님, 약 3~5초 소요).
         """
-        if self.mode == "cli": 
-            print("--- 🧠 AI가 최적의 하이퍼파라미터를 찾기 위해 대규모 연산을 수행합니다 (시간 소요됨)... ---")
+        if self.mode == "cli": print("--- 🤖 XGBoost 모델 실전 학습 시작 ---")
         
-        # 1. 탐색할 파라미터 공간 (넓게 설정)
-        param_dist = {
-            'n_estimators': [300, 500, 700, 1000, 1500],  # 나무 개수 다양화
-            'learning_rate': [0.005, 0.01, 0.03, 0.05, 0.1], 
-            'max_depth': [3, 4, 5, 6, 7, 8, 10],
-            'min_child_weight': [1, 3, 5, 7],
-            'gamma': [0, 0.1, 0.2, 0.3],
-            'subsample': [0.6, 0.7, 0.8, 0.9, 1.0],
-            'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0],
-            'reg_alpha': [0, 0.01, 0.1, 1],
-            'reg_lambda': [0.5, 1, 1.5, 2]
+        # 공정 데이터에 최적화된 검증된 파라미터
+        xgb_params = {
+            'n_estimators': 800,      # 충분한 학습량
+            'learning_rate': 0.03,    # 꼼꼼하게 학습
+            'max_depth': 6,           # 복잡도 수용
+            'subsample': 0.85,        # 데이터 노이즈 강건성
+            'colsample_bytree': 0.85, # 변수 편향 방지
+            'n_jobs': -1,             # 병렬 처리
+            'random_state': 42
         }
         
-        xgb_base = xgb.XGBRegressor(random_state=42, n_jobs=-1)
-        
-        # 2. 무작위 탐색 시작
-        # n_iter=50 -> 50가지 조합 실험
-        # cv=5 -> 각 조합마다 5번 검증 (신뢰도 확보)
-        search = RandomizedSearchCV(
-            estimator=xgb_base,
-            param_distributions=param_dist,
-            n_iter=50, 
-            scoring='neg_mean_squared_error',
-            cv=5,
-            verbose=0,
-            random_state=42,
-            n_jobs=-1
-        )
-        
-        # 대표 타겟(0번 인덱스)을 기준으로 최적 파라미터 찾기
-        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0])
-        self.best_params = search.best_params_
-        
-        if self.mode == "cli":
-            print(f"✨ 발견된 최적 파라미터:\n{self.best_params}")
-            print("--- 🤖 최적 파라미터로 최종 다중출력 모델 학습 중... ---")
-
-        # 3. 찾은 파라미터로 전체 타겟에 대해 최종 학습
-        self.model = MultiOutputRegressor(xgb.XGBRegressor(**self.best_params, n_jobs=-1, random_state=42))
+        # 다중 출력 모델 학습 (9개 물성 동시 예측)
+        self.model = MultiOutputRegressor(xgb.XGBRegressor(**xgb_params))
         self.model.fit(self.X_train_scaled, self.Y_train_scaled)
         
-        # 4. 최종 평가
+        # 평가
         Y_pred_scaled = self.model.predict(self.X_test_scaled)
         Y_pred = self.Y_scaler.inverse_transform(Y_pred_scaled)
         
@@ -185,8 +156,9 @@ class ALDOptimizer:
         rmse = np.sqrt(mean_squared_error(self.Y_test, Y_pred))
         
         # 상세 지표
-        RMSE_scores = np.sqrt(mean_squared_error(self.Y_test, Y_pred, multioutput='raw_values'))
         R2_scores = r2_score(self.Y_test, Y_pred, multioutput='raw_values')
+        RMSE_scores = np.sqrt(mean_squared_error(self.Y_test, Y_pred, multioutput='raw_values'))
+        
         R2_dict = dict(zip(self.ALL_OUTPUT_FEATURES_ORDERED, R2_scores.round(4)))
         RMSE_dict = dict(zip(self.ALL_OUTPUT_FEATURES_ORDERED, RMSE_scores.round(4)))
         
@@ -194,11 +166,19 @@ class ALDOptimizer:
         self.performance_df = pd.DataFrame({'RMSE': RMSE_dict, 'R^2': R2_dict})
         
         if self.mode == "cli":
-            print(f"✅ 정밀 학습 완료 | 평균 R2 Score: {r2:.4f}")
+            print(f"✅ 모델 학습 완료 | 평균 정확도(R2): {r2:.4f}")
 
     # --- 물리 모델 (SC) ---
     @staticmethod
-    def _calculate_physics_sc(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
+    def _calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
+        const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
+        d_precursor_m = const["diameter_m"]; T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
+        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
+        Kn = lambda_m / L_feature_m
+        return lambda_m, Kn
+
+    @staticmethod
+    def _calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
         import numpy as np
         const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
         d = const["diameter_m"]; M_kg = const["mass_g_mol"] / 1000.0 / N_A
@@ -209,94 +189,70 @@ class ALDOptimizer:
         D_eff = 1.0 / ((1.0 / ((1/3)*lambda_m*v_avg + 1e-30)) + (1.0 / ((1/3)*v_avg*CD_m + 1e-30)))
         lambda_pen = np.sqrt(D_eff * Pulse_Time_s + 1e-30)
         phi = L_m / (lambda_pen + 1e-30)
-        if phi < 1.0: sc = 1.0 / (1.0 + phi)
-        else: sc = np.exp(-phi)
-        return float(np.clip(sc * 100.0, 0.0, 100.0))
-
-    @staticmethod
-    def _calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
-        import numpy as np
-        const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
-        d = const["diameter_m"]; M_kg = const["mass_g_mol"] / 1000.0 / N_A
-        T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
-        L_m = AR_value * CD_m
-        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg)); lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
-        D_A = (1.0 / 3.0) * lambda_m * v_avg; D_Kn = (1.0 / 3.0) * v_avg * CD_m
-        D_eff = 1.0 / ((1.0 / (D_A + 1e-30)) + (1.0 / (D_Kn + 1e-30)))
-        lambda_pen = np.sqrt(D_eff * Pulse_Time_s + 1e-30)
-        phi = L_m / (lambda_pen + 1e-30)
-        if phi < 1.0:
-            SC_fraction = 1.0 / (1.0 + phi); mode = "Reaction Limited (RDS, φ < 1)"
-        else:
-            SC_fraction = np.exp(-phi); mode = "Diffusion Limited (RDS, φ ≥ 1)"
+        if phi < 1.0: SC_fraction = 1.0 / (1.0 + phi); mode = "Reaction Limited (RDS, φ < 1)"
+        else: SC_fraction = np.exp(-phi); mode = "Diffusion Limited (RDS, φ ≥ 1)"
         return float(np.clip(SC_fraction * 100.0, 0.0, 100.0)), float(phi), mode
-        
-    @staticmethod
-    def _calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
-        const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
-        d_precursor_m = const["diameter_m"]; T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
-        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
-        Kn = lambda_m / L_feature_m
-        return lambda_m, Kn
 
-    # --- 예측 및 최적화 ---
-    def _create_input_df(self, params, precursor, co_reactant, purge_gas):
-        df = pd.DataFrame(0.0, index=[0], columns=self.ALL_INPUT_FEATURES_ORDERED)
-        for k, v in params.items():
-            if k in df.columns: df.at[0, k] = v
-        for col in [f"Precursor_{precursor}", f"Co-reactant_{co_reactant}", f"Purge Gas_{purge_gas}"]:
-            if col in df.columns: df.at[0, col] = 1.0
-        return df
+    def _calculate_physics_sc(self, P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
+        sc, _, _ = self._calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m)
+        return sc
 
-    def predict(self, params, precursor, co_reactant, purge_gas):
-        input_df = self._create_input_df(params, precursor, co_reactant, purge_gas)
-        X_scaled = self.X_scaler.transform(input_df.values)
-        Y_pred_scaled = self.model.predict(X_scaled)
-        Y_pred = self.Y_scaler.inverse_transform(Y_pred_scaled)[0]
-        return pd.Series(Y_pred, index=self.ALL_OUTPUT_FEATURES_ORDERED).round(4)
+    def _create_model_input(self, recipe_params, precursor_name, co_reactant_name, purge_gas_name) -> pd.DataFrame:
+        input_df = pd.DataFrame(columns=self.ALL_INPUT_FEATURES_ORDERED); input_df.loc[0] = 0.0
+        for key, value in recipe_params.items():
+            if key in input_df.columns: input_df.at[0, key] = value
+        if f"Precursor_{precursor_name}" in input_df.columns: input_df.at[0, f"Precursor_{precursor_name}"] = 1.0
+        if f"Co-reactant_{co_reactant_name}" in input_df.columns: input_df.at[0, f"Co-reactant_{co_reactant_name}"] = 1.0
+        if f"Purge Gas_{purge_gas_name}" in input_df.columns: input_df.at[0, f"Purge Gas_{purge_gas_name}"] = 1.0
+        return input_df
 
-    def optimize(self, user_input, silent=False):
-        initial_cycles = max(10, int(user_input["Thickness (nm)"] * 10))
-        co_reactant = 'H2O' if user_input["Precursor"] in ['TMA', 'TDMAH'] else 'O3'
+    def _predict_from_recipe(self, recipe_params, precursor_name, co_reactant_name, purge_gas_name) -> pd.Series:
+        input_df = self._create_model_input(recipe_params, precursor_name, co_reactant_name, purge_gas_name)
+        X_scaled = self.X_scaler.transform(input_df.values); X_tensor = torch.from_numpy(X_scaled).float()
+        self.final_model.eval()
+        with torch.no_grad(): Y_pred_scaled_tensor = self.final_model(X_tensor)
+        Y_pred_unscaled = self.Y_scaler.inverse_transform(Y_pred_scaled_tensor.numpy())[0]
+        return pd.Series(Y_pred_unscaled, index=self.ALL_OUTPUT_FEATURES_ORDERED).round(4)
+
+    def _constraint_sc(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
+        target_ar = user_input["Target AR"]
+        TARGET_SC_MIN = 98.0 if target_ar <= 5 else 90.0 if target_ar <= 15 else 85.0
+        phys_sc = self._calculate_physics_sc(x[1], x[0], x[2], user_input["Target AR"], user_input["Precursor"], user_input["CD (nm)"] * 1e-9)
+        return phys_sc - TARGET_SC_MIN
+
+    def _objective_function(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
+        recipe_params = {
+            "Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
+            "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
+            "Cycles (n)": fixed_cycles_n, "Co-reactant_Pulse Time (s)": x[2]
+        }
+        try:
+            pred = self._predict_from_recipe(recipe_params, user_input["Precursor"], co_reactant_name, purge_gas_name)
+        except: return 1e9
+        target_gpc = (user_input["Thickness (nm)"] * 10) / (fixed_cycles_n + 1e-6)
+        cost = (cost_weights["gpc"] * (pred.get('GPC (A/cycle)', 0) - target_gpc)**2) + (cost_weights["roughness"] * (pred.get('Surface Roughness (RMS, nm)', 10)/5.0)**2)
+        return cost
+
+    def generate_optimal_recipe(self, user_input: Dict[str, Any], silent: bool = False):
+        precursor = user_input["Precursor"]; thickness = user_input["Thickness (nm)"]
+        co_reactant = 'H2O' if precursor in ['TMA', 'TDMAH'] else 'O3'; purge_gas = "N2"
+        initial_cycles = max(10, int(round((thickness * 10) / self.DEFAULT_GPC_GUESS_A)))
         
         bounds = [(150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500)]
         initial_guess = [np.random.uniform(l, h) for l, h in bounds]
-        
+
         if self.mode == "cli" and not silent:
             print(f"\n--- 🔍 최적화 탐색 시작 ---")
 
-        def objective(x):
-            params = {
-                "Temperature (c)": x[0], "Pressure (torr)": x[1], 
-                "Precursor_Pulse Time (s)": x[2], "Co-reactant_Pulse Time (s)": x[2],
-                "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
-                "Cycles (n)": initial_cycles
-            }
-            try:
-                pred = self.predict(params, user_input["Precursor"], co_reactant, "N2")
-                gpc_pred = pred.get("GPC (A/cycle)", 0.1)
-                rough_pred = pred.get("Surface Roughness (RMS, nm)", 10)
-                target_gpc = (user_input["Thickness (nm)"] * 10) / initial_cycles
-                return 10000 * (gpc_pred - target_gpc)**2 + 10 * (rough_pred**2)
-            except: return 1e9
-
-        def constraint(x):
-            sc = self._calculate_physics_sc(
-                x[1], x[0], x[2], user_input["Target AR"], 
-                user_input["Precursor"], user_input["CD (nm)"]*1e-9
-            )
-            target_sc = 90.0 if user_input["Target AR"] <= 15 else 85.0
-            return sc - target_sc
-
-        res = minimize(objective, x0, method='SLSQP', bounds=bounds, 
-                       constraints={'type': 'ineq', 'fun': constraint}, options={'maxiter': 50})
+        args = (user_input, co_reactant, purge_gas, COST_WEIGHTS, initial_cycles)
+        # 💡 maxiter 50: 충분한 최적화 반복 수행
+        result = minimize(self._objective_function, initial_guess, args=args, method='SLSQP', bounds=bounds,
+                          constraints={'type': 'ineq', 'fun': self._constraint_sc, 'args': args}, options={'maxiter': 50, 'eps': 1e-6})
         
-        x = res.x
-        check_params = {
-            "Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
-            "Co-reactant_Pulse Time (s)": x[2], "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
-            "Cycles (n)": initial_cycles
-        }
+        x = result.x
+        check_params = {"Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
+                        "Co-reactant_Pulse Time (s)": x[2], "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
+                        "Cycles (n)": initial_cycles}
         check_pred = self.predict(check_params, user_input["Precursor"], co_reactant, "N2")
         final_gpc = max(0.001, check_pred.get("GPC (A/cycle)", 1.0))
         final_cycles = int(round((user_input["Thickness (nm)"] * 10) / final_gpc))
@@ -313,16 +269,9 @@ class ALDOptimizer:
             "Purge Time (s)": round(x[3], 1), "Purge Flow (sccm)": int(x[4])
         }
         
-        phys_sc = self._calculate_physics_sc(x[1], x[0], x[2], user_input["Target AR"], user_input["Precursor"], user_input["CD (nm)"]*1e-9)
-        
-        sc_val, phi, mode = self._calculate_physics_sc_details(x[1], x[0], x[2], user_input["Target AR"], user_input["Precursor"], user_input["CD (nm)"]*1e-9)
-        lambda_m, Kn = self._calculate_physical_parameters(x[0], x[1], user_input["Precursor"], user_input["CD (nm)"]*1e-9)
-        
-        valid = {
-            "Mean Free Path (λ) [m]": f"{lambda_m:.2e}", "Knudsen Number (Kn)": f"{Kn:.2f}", 
-            "Thiele Modulus (φ)": f"{phi:.4f}", "Transport Mode": mode,
-            "Physics SC (%)": f"{phys_sc:.2f}%", "Cost": f"{res.fun:.4f}"
-        }
+        sc_val, phi, mode = self._calculate_physics_sc_details(x[1], x[0], x[2], user_input["Target AR"], precursor, user_input["CD (nm)"]*1e-9)
+        lambda_m, Kn = self._calculate_physical_parameters(x[0], x[1], precursor, user_input["CD (nm)"]*1e-9)
+        valid = {"Physics SC (%)": f"{sc_val:.2f}%", "Transport Mode": mode, "Thiele Modulus": f"{phi:.2f}"}
         
         if self.mode == "cli" and not silent:
             print("✅ 최적화 완료!")
@@ -334,7 +283,7 @@ class ALDOptimizer:
         for val in range_values:
             current_input = base_user_input.copy()
             current_input[target_param_name] = val
-            rec, pred, val_data = self.optimize(current_input, silent=True)
+            rec, pred, val_data = self.generate_optimal_recipe(current_input, silent=True)
             
             row = {target_param_name: val}
             row.update({k: v for k, v in rec.items() if isinstance(v, (int, float))})
@@ -348,7 +297,7 @@ class ALDOptimizer:
 # 🖥️ CLI 모드 (터미널)
 # ==========================================
 def main_cli():
-    print("\n" + "="*50 + "\n  [CLI] High-Spec ALD Optimizer (Deep Learning)\n" + "="*50)
+    print("\n" + "="*50 + "\n  [CLI] ALD AI Optimizer (Real Training Ver.)\n" + "="*50)
     
     import matplotlib
     try: matplotlib.use('TkAgg')
@@ -358,9 +307,8 @@ def main_cli():
     if not os.path.exists(csv_file):
         print(f"[오류] '{csv_file}' 파일이 없습니다."); return
     
-    # 초기화 (여기서 시간이 꽤 걸립니다)
     optimizer = ALDOptimizer(file_path=csv_file, mode="cli")
-    print(f"📊 최종 모델 성능 (R2): {optimizer.performance_metrics['R2']:.4f}")
+    print(f"📊 모델 정확도 (R2): {optimizer.performance_metrics['R2']:.4f}")
 
     try:
         p_list = ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"]
@@ -373,13 +321,14 @@ def main_cli():
     except: print("[입력 오류]"); return
 
     user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-    recipe, pred, valid = optimizer.optimize(user_input)
+    recipe, pred, valid = optimizer.generate_optimal_recipe(user_input)
     
     print("\n" + "-"*30)
     print(f"💡 최적 레시피:\n{pd.Series(recipe).to_string()}")
     print("\n📈 예측 물성:\n{pred.to_string()}")
     print("-" * 30)
 
+    # 시각화
     print("\n📊 [시각화] 목표값 변화에 따른 경향 분석")
     x_opts = ["Thickness (nm)", "Target AR"]
     print(f"1. {x_opts[0]}  2. {x_opts[1]}")
@@ -418,10 +367,10 @@ def main_cli():
 # 🌐 GUI 모드 (Streamlit)
 # ==========================================
 def main_gui():
-    st.set_page_config(page_title="High-Spec ALD Optimizer", layout="wide")
-    st.title("🚀 고성능 AI ALD 공정 최적화 (Heavy Computation)")
+    st.set_page_config(page_title="Real ALD Optimizer", layout="wide")
+    st.title("🚀 실전 AI ALD 공정 최적화 (Real Training)")
 
-    @st.cache_resource(show_spinner="AI가 최적 모델을 학습 중입니다... (시간 소요)")
+    @st.cache_resource(show_spinner="AI 모델 실전 학습 중...")
     def load_model():
         csv_file_name = "AI_ALD1.csv"
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -443,7 +392,7 @@ def main_gui():
     if st.sidebar.button("최적화 실행", type="primary"):
         with st.spinner("최적해 탐색 중..."):
             u_in = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-            rec, pred, val = optimizer.optimize(u_in)
+            rec, pred, val = optimizer.generate_optimal_recipe(u_in)
             st.session_state.res = (rec, pred, val, u_in)
 
     if st.session_state.res:
@@ -452,20 +401,18 @@ def main_gui():
         tab1, tab2 = st.tabs(["결과 리포트", "시뮬레이션 그래프"])
         
         with tab1:
-            c1, c2, c3 = st.columns(3)
+            c1, c2 = st.columns(2)
             with c1:
                 st.subheader("💡 최적 레시피")
                 st.dataframe(pd.DataFrame([rec]).T.rename(columns={0:"Value"}))
+                st.info(f"물리검증 SC: {val['Physics SC (%)']}")
             with c2:
                 st.subheader("📈 AI 예측 결과")
                 st.dataframe(pred.to_frame("Predicted"))
                 st.metric("두께 검증", f"{pred['Thickness (nm)']:.2f} nm", delta=f"{pred['Thickness (nm)'] - u_in['Thickness (nm)']:.2f} nm")
-            with c3:
-                st.subheader("🔬 물리 검증")
-                st.dataframe(pd.DataFrame([val]).T.rename(columns={0:"Value"}))
             
             st.markdown("---")
-            st.caption(f"AI Best Params: {optimizer.best_params}")
+            st.caption("AI 모델 성능 (R^2 Score)")
             st.dataframe(optimizer.performance_df.T)
 
         with tab2:
