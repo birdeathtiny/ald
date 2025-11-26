@@ -44,7 +44,7 @@ class ALDOptimizer:
         self.model = None
         self.ALL_INPUT_FEATURES_ORDERED = []
         self.ALL_OUTPUT_FEATURES_ORDERED = []
-        self.performance_ metrics = {}
+        self.performance_metrics = {} # 💡 [수정됨] 오타 수정 (performance_ metrics -> performance_metrics)
         
         # 데이터 로드 및 모델 학습
         df_encoded = self._load_and_preprocess(file_path)
