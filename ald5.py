@@ -36,7 +36,7 @@ class ALDOptimizer:
     def __init__(self, file_path: str, mode: str = "cli"):
         self.mode = mode
         if self.mode == "cli":
-            print(f"--- [Smart Real-Tuning] 데이터 로드 및 실시간 AI 학습 시작 ---")
+            print(f"--- [Ultra-Fast Tuning] 데이터 로드 및 초고속 학습 시작 ---")
         
         self.DEFAULT_GPC_GUESS_A = 1.0 
         self.X_scaler = StandardScaler()
@@ -53,8 +53,8 @@ class ALDOptimizer:
         # 2. 데이터셋 준비
         self._prepare_datasets(df_encoded)
         
-        # 3. 모델 학습 (실제 튜닝 수행)
-        self._train_model_smart_tuning()
+        # 3. 모델 학습 (초고속 튜닝)
+        self._train_model_ultra_fast()
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -123,55 +123,44 @@ class ALDOptimizer:
         self.Y_test_scaled = self.Y_scaler.transform(self.Y_test)
 
         if self.mode == "cli":
-            print(f"✅ 데이터 로드 완료 (입력: {X.shape[1]}개, 출력: {Y.shape[1]}개)")
+            print(f"✅ 데이터 로드 완료")
 
-    def _train_model_smart_tuning(self):
+    def _train_model_ultra_fast(self):
         """
-        [Smart Real-Tuning Logic]
-        1. 0.5초 컷 X -> 실제 탐색 수행
-        2. 무한 대기 X -> 'Thickness' 타겟을 기준으로 최적 파라미터를 먼저 찾고(약 3~5초),
-           그 파라미터를 전체 모델에 적용하여 최종 학습(약 1~2초).
+        [Ultra Fast Tuning]
+        - n_iter=3: 핵심적인 3가지 경우의 수만 빠르게 비교 (진짜 학습 수행)
+        - n_jobs=1: 오버헤드 제거하여 속도 극대화
         """
-        if self.mode == "cli": 
-            print("--- 🧠 AI가 최적의 학습 파라미터를 탐색 중입니다... (약 5~8초 소요) ---")
+        if self.mode == "cli": print("--- 🤖 AI 초고속 튜닝 및 학습 시작... ---")
         
-        # 1. 탐색할 파라미터 범위 (핵심 하이퍼파라미터)
+        # 핵심 파라미터만 압축
         param_dist = {
-            'n_estimators': [200, 300, 500],          # 나무 개수
-            'learning_rate': [0.03, 0.05, 0.1, 0.2],  # 학습 속도
-            'max_depth': [4, 5, 6, 7],                # 나무 깊이
-            'min_child_weight': [1, 3],               # 과적합 방지
-            'subsample': [0.7, 0.8, 0.9],             # 데이터 샘플링
-            'colsample_bytree': [0.7, 0.8, 0.9]       # 컬럼 샘플링
+            'n_estimators': [200, 400],
+            'learning_rate': [0.05, 0.1],
+            'max_depth': [4, 6]
         }
         
-        # 2. RandomizedSearchCV 수행
-        # n_iter=10: 10번의 무작위 실험을 수행하여 최고 점수를 찾음
+        # 💡 n_jobs=1로 설정하여 병렬처리 오버헤드 제거 (속도 향상 핵심)
         search = RandomizedSearchCV(
-            estimator=xgb.XGBRegressor(n_jobs=-1, random_state=42),
+            estimator=xgb.XGBRegressor(n_jobs=1, random_state=42),
             param_distributions=param_dist,
-            n_iter=10,  # 💡 10번 실험 (너무 오래 안 걸리면서 충분한 탐색)
-            cv=3,       # 3-Fold 교차 검증
+            n_iter=3,  # 3번만 실험 (속도 확보)
+            cv=2,      # 2번만 검증
             scoring='neg_mean_squared_error',
             verbose=0,
             random_state=42,
-            n_jobs=-1
+            n_jobs=1   
         )
         
-        # 💡 속도 비결: 대표 타겟(0번 인덱스, 보통 Thickness)으로 튜닝
+        # 튜닝 수행
         search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0]) 
-        
         self.best_params = search.best_params_
         
-        if self.mode == "cli":
-            print(f"✨ 최적 파라미터 발견: {self.best_params}")
-            print("--- 🤖 최적 파라미터로 전체 모델 재학습 중... ---")
-        
-        # 3. 찾은 파라미터로 전체 타겟(9개) 학습
+        # 최종 학습 (n_jobs=-1 사용 가능)
         self.model = MultiOutputRegressor(xgb.XGBRegressor(**self.best_params, n_jobs=-1, random_state=42))
         self.model.fit(self.X_train_scaled, self.Y_train_scaled)
         
-        # 4. 평가
+        # 평가
         Y_pred_scaled = self.model.predict(self.X_test_scaled)
         Y_pred = self.Y_scaler.inverse_transform(Y_pred_scaled)
         
@@ -188,7 +177,7 @@ class ALDOptimizer:
         self.performance_df = pd.DataFrame({'RMSE': RMSE_dict, 'R^2': R2_dict})
         
         if self.mode == "cli":
-            print(f"✅ 학습 완료 | 정확도(R2): {r2:.4f}")
+            print(f"✅ 학습 완료 (R2: {r2:.4f})")
 
     # --- 물리 모델 (SC) ---
     @staticmethod
@@ -308,7 +297,6 @@ class ALDOptimizer:
             current_input = base_user_input.copy()
             current_input[target_param_name] = val
             rec, pred, val_data = self.generate_optimal_recipe(current_input, silent=True)
-            
             phys_sc = self._calculate_physics_sc(
                 rec['Pressure (torr)'], rec['Temperature (c)'], rec['Pulse Time (s)'],
                 current_input['Target AR'], current_input['Precursor'], current_input['CD (nm)'] * 1e-9
@@ -322,19 +310,20 @@ class ALDOptimizer:
 
 
 # ==========================================
-# 🖥️ CLI 모드 실행 함수
+# 🖥️ CLI 모드 실행 함수 (터미널)
 # ==========================================
 def main_cli():
-    print("\n" + "="*50 + "\n  [CLI] ALD Optimizer (Smart Real-Tuning)\n" + "="*50)
+    print("\n" + "="*50 + "\n  [CLI] ALD AI Optimizer (Fast Tuning)\n" + "="*50)
     
     import matplotlib
     try: matplotlib.use('TkAgg')
     except: pass 
 
-    csv_file = "AI_ALD1.csv"
+    csv_file = "AI_ALD1.csv" 
     if not os.path.exists(csv_file):
         print(f"[오류] '{csv_file}' 파일이 없습니다."); return
     
+    # 여기서 학습 (약 2~3초)
     optimizer = ALDOptimizer(file_path=csv_file, mode="cli")
     print(f"📊 모델 정확도 (R2): {optimizer.performance_metrics['R2']:.4f}")
 
@@ -364,36 +353,22 @@ def main_cli():
     except: x_idx = 0
     target_param = x_opts[x_idx]
 
-    y_left_opts = ["Temperature (c)", "Pressure (torr)", "Pulse Time (s)", "Purge Time (s)", "Cycles (n)"]
-    print("\n[2] 왼쪽 Y축 (최적 공정 조건) 선택:")
-    for i, opt in enumerate(y_left_opts, 1): print(f"  {i}. {opt}")
-    try: yl_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
-    except: yl_idx = 0
-    y_left = y_left_opts[yl_idx] if 0 <= yl_idx < len(y_left_opts) else y_left_opts[0]
-
-    y_right_opts = ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"]
-    print("\n[3] 오른쪽 Y축 (예측 물성) 선택:")
-    for i, opt in enumerate(y_right_opts, 1): print(f"  {i}. {opt}")
-    try: yr_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
-    except: yr_idx = 0
-    y_right = y_right_opts[yr_idx] if 0 <= yr_idx < len(y_right_opts) else y_right_opts[0]
-
-    print(f"\n📈 '{target_param}' 변화에 따른 시뮬레이션 진행 중...")
+    print(f"📈 '{target_param}' 변화 시뮬레이션 중...")
     curr = user_input[target_param]
     sweep_range = np.linspace(curr * 0.5, curr * 1.5, 10)
     df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
 
-    plt.figure(figsize=(14, 5))
+    plt.figure(figsize=(12, 5))
+    
     ax1 = plt.subplot(1, 2, 1)
-    line1 = ax1.plot(df[target_param], df[y_left], 'r-o', label=f"Recipe: {y_left}")
-    ax1.set_xlabel(target_param); ax1.set_ylabel(y_left, color='r')
-    ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
+    l1 = ax1.plot(df[target_param], df["Temperature (c)"], 'r-o', label="Temp (c)")
+    ax1.set_xlabel(target_param); ax1.set_ylabel("Temp (c)", color='r')
     ax2 = ax1.twinx()
-    line2 = ax2.plot(df[target_param], df[y_right], 'b--s', label=f"Property: {y_right}")
-    ax2.set_ylabel(y_right, color='b'); ax2.tick_params(axis='y', labelcolor='b')
-    lines = line1 + line2; labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
-    ax1.set_title(f"Trend: {y_left} & {y_right}")
+    l2 = ax2.plot(df[target_param], df["GPC (A/cycle)"], 'b--s', label="GPC")
+    ax2.set_ylabel("GPC (A/cycle)", color='b')
+    lns = l1 + l2; labs = [l.get_label() for l in lns]
+    ax1.legend(lns, labs, loc=0)
+    plt.title("Temp & GPC Trend")
 
     plt.subplot(1, 2, 2)
     plt.plot(df[target_param], df["Step Coverage (sc, %)"], 'g-^', label="AI SC")
@@ -410,9 +385,9 @@ def main_cli():
 # ==========================================
 def main_gui():
     st.set_page_config(page_title="ALD Optimizer", layout="wide")
-    st.title("🚀 AI 기반 ALD 공정 최적화 시스템 (Smart Tuning)")
+    st.title("🚀 AI 기반 ALD 공정 최적화 시스템")
 
-    @st.cache_resource(show_spinner="AI 모델 스마트 튜닝 중 (약 5~8초)...")
+    @st.cache_resource(show_spinner="AI 모델 초고속 튜닝 중...")
     def load_model():
         csv_file_name = "AI_ALD1.csv"
         current_dir = os.path.dirname(os.path.abspath(__file__))
