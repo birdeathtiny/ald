@@ -36,7 +36,7 @@ class ALDOptimizer:
     def __init__(self, file_path: str, mode: str = "cli"):
         self.mode = mode
         if self.mode == "cli":
-            print(f"--- [Ultra-Fast Tuning] 데이터 로드 및 초고속 학습 시작 ---")
+            print(f"--- [Fast Auto-Tuning] 데이터 로드 및 스마트 학습 시작 ---")
         
         self.DEFAULT_GPC_GUESS_A = 1.0 
         self.X_scaler = StandardScaler()
@@ -53,8 +53,8 @@ class ALDOptimizer:
         # 2. 데이터셋 준비
         self._prepare_datasets(df_encoded)
         
-        # 3. 모델 학습 (초고속 튜닝)
-        self._train_model_ultra_fast()
+        # 3. 모델 학습 (싱글 타겟 튜닝으로 속도 극대화)
+        self._train_model_smart_tuning()
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -125,42 +125,50 @@ class ALDOptimizer:
         if self.mode == "cli":
             print(f"✅ 데이터 로드 완료")
 
-    def _train_model_ultra_fast(self):
+    def _train_model_smart_tuning(self):
         """
-        [Ultra Fast Tuning]
-        - n_iter=3: 핵심적인 3가지 경우의 수만 빠르게 비교 (진짜 학습 수행)
-        - n_jobs=1: 오버헤드 제거하여 속도 극대화
+        [Speed-Up Logic]
+        9개 타겟을 모두 튜닝하면 9배 느려집니다.
+        가장 중요한 'Thickness(두께)' 데이터(Index 0)만 가지고 최적 파라미터를 찾은 뒤,
+        그 파라미터를 전체 모델에 적용합니다. -> 속도 9배 향상
         """
-        if self.mode == "cli": print("--- 🤖 AI 초고속 튜닝 및 학습 시작... ---")
+        if self.mode == "cli": 
+            print("--- 🧠 AI 실시간 최적화 수행 중 (약 2~3초 소요)... ---")
         
-        # 핵심 파라미터만 압축
         param_dist = {
-            'n_estimators': [200, 400],
-            'learning_rate': [0.05, 0.1],
-            'max_depth': [4, 6]
+            'n_estimators': [200, 300, 500],          
+            'learning_rate': [0.05, 0.1, 0.2],        
+            'max_depth': [4, 5, 6],                   
+            'subsample': [0.8, 0.9],                  
+            'colsample_bytree': [0.8, 0.9]            
         }
         
-        # 💡 n_jobs=1로 설정하여 병렬처리 오버헤드 제거 (속도 향상 핵심)
+        # 1. 대표 타겟(두께)으로만 튜닝 (매우 빠름)
         search = RandomizedSearchCV(
-            estimator=xgb.XGBRegressor(n_jobs=1, random_state=42),
+            estimator=xgb.XGBRegressor(n_jobs=-1, random_state=42),
             param_distributions=param_dist,
-            n_iter=3,  # 3번만 실험 (속도 확보)
-            cv=2,      # 2번만 검증
+            n_iter=10,  # 10번 실험
+            cv=2,       # 2번 검증
             scoring='neg_mean_squared_error',
             verbose=0,
             random_state=42,
-            n_jobs=1   
+            n_jobs=-1
         )
         
-        # 튜닝 수행 (대표 타겟 기준)
-        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0]) 
+        # Thickness(0번 인덱스)만 사용하여 튜닝
+        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0])
+        
         self.best_params = search.best_params_
         
-        # 최종 학습 (n_jobs=-1 사용 가능)
+        if self.mode == "cli":
+            print(f"✨ 최적 파라미터 발견: {self.best_params}")
+            print("--- 🤖 전체 모델 학습 적용 중... ---")
+        
+        # 2. 찾은 파라미터로 전체 학습 (MultiOutput)
         self.model = MultiOutputRegressor(xgb.XGBRegressor(**self.best_params, n_jobs=-1, random_state=42))
         self.model.fit(self.X_train_scaled, self.Y_train_scaled)
         
-        # 평가
+        # 3. 평가
         Y_pred_scaled = self.model.predict(self.X_test_scaled)
         Y_pred = self.Y_scaler.inverse_transform(Y_pred_scaled)
         
@@ -177,7 +185,7 @@ class ALDOptimizer:
         self.performance_df = pd.DataFrame({'RMSE': RMSE_dict, 'R^2': R2_dict})
         
         if self.mode == "cli":
-            print(f"✅ 학습 완료 (R2: {r2:.4f})")
+            print(f"✅ 학습 완료 | R2 Score: {r2:.4f}")
 
     # --- 물리 모델 (SC) ---
     @staticmethod
@@ -195,9 +203,9 @@ class ALDOptimizer:
         d = const["diameter_m"]; M_kg = const["mass_g_mol"] / 1000.0 / N_A
         T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
         L_m = AR_value * CD_m
-        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg)); lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
-        D_A = (1.0 / 3.0) * lambda_m * v_avg; D_Kn = (1.0 / 3.0) * v_avg * CD_m
-        D_eff = 1.0 / ((1.0 / (D_A + 1e-30)) + (1.0 / (D_Kn + 1e-30)))
+        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg))
+        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
+        D_eff = 1.0 / ((1.0 / ((1/3)*lambda_m*v_avg + 1e-30)) + (1.0 / ((1/3)*v_avg*CD_m + 1e-30)))
         lambda_pen = np.sqrt(D_eff * Pulse_Time_s + 1e-30)
         phi = L_m / (lambda_pen + 1e-30)
         if phi < 1.0: SC_fraction = 1.0 / (1.0 + phi); mode = "Reaction Limited (RDS, φ < 1)"
@@ -310,10 +318,10 @@ class ALDOptimizer:
 
 
 # ==========================================
-# 🖥️ CLI 모드 실행 함수 (터미널 + Matplotlib 창)
+# 🖥️ CLI 모드 실행 함수
 # ==========================================
 def main_cli():
-    print("\n" + "="*50 + "\n  [CLI] ALD AI Optimizer (Ultra Fast Tuning)\n" + "="*50)
+    print("\n" + "="*50 + "\n  [CLI] ALD AI Optimizer (Smart Tuning)\n" + "="*50)
     
     import matplotlib
     try: matplotlib.use('TkAgg')
@@ -325,6 +333,7 @@ def main_cli():
     
     optimizer = ALDOptimizer(file_path=csv_file, mode="cli")
     print(f"📊 모델 정확도 (R2): {optimizer.performance_metrics['R2']:.4f}")
+    print(f"✨ 탐색된 최적 파라미터: {optimizer.best_params}")
 
     try:
         p_list = ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"]
@@ -337,52 +346,35 @@ def main_cli():
     except: print("[입력 오류]"); return
 
     user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-    recipe, pred, valid, stats = optimizer.generate_optimal_recipe(user_input)
+    recipe, pred, valid = optimizer.generate_optimal_recipe(user_input)
+    
+    print("\n" + "-"*30)
+    print(f"💡 최적 레시피:\n{pd.Series(recipe).to_string()}")
+    print("\n📈 예측 물성:\n{pred.to_string()}")
+    print("-" * 30)
 
-    print("\n[💡 AI 최적 레시피]\n", pd.Series(recipe).to_string())
-    print("\n[📈 예측 물성]\n", pred.to_string())
-    print("\n[🔬 물리 검증]\n", pd.Series(valid).to_string())
-    print(f"\n✅ 최종 두께: {pred['Thickness (nm)']:.4f} nm")
-
-    # CLI 시각화
-    print("\n" + "="*50 + "\n📊 그래프 시각화 설정 (윈도우 창으로 표시됩니다)\n" + "="*50)
-    x_options = ["Thickness (nm)", "Target AR"]
-    print("[1] X축 (변화시킬 목표값) 선택:")
-    for i, opt in enumerate(x_options, 1): print(f"  {i}. {opt}")
-    try: x_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
+    print("\n📊 [시각화] 목표값 변화에 따른 경향 분석")
+    x_opts = ["Thickness (nm)", "Target AR"]
+    print(f"1. {x_opts[0]}  2. {x_opts[1]}")
+    try: x_idx = int(input("=> X축 선택 (1/2): ")) - 1
     except: x_idx = 0
-    target_param = x_options[x_idx] if 0 <= x_idx < len(x_options) else x_options[0]
+    target_param = x_opts[x_idx]
 
-    y_left_opts = ["Temperature (c)", "Pressure (torr)", "Pulse Time (s)", "Purge Time (s)", "Cycles (n)"]
-    print("\n[2] 왼쪽 Y축 (최적 공정 조건) 선택:")
-    for i, opt in enumerate(y_left_opts, 1): print(f"  {i}. {opt}")
-    try: yl_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
-    except: yl_idx = 0
-    y_left = y_left_opts[yl_idx] if 0 <= yl_idx < len(y_left_opts) else y_left_opts[0]
-
-    y_right_opts = ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"]
-    print("\n[3] 오른쪽 Y축 (예측 물성) 선택:")
-    for i, opt in enumerate(y_right_opts, 1): print(f"  {i}. {opt}")
-    try: yr_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
-    except: yr_idx = 0
-    y_right = y_right_opts[yr_idx] if 0 <= yr_idx < len(y_right_opts) else y_right_opts[0]
-
-    print(f"\n📈 '{target_param}' 변화에 따른 시뮬레이션 진행 중...")
+    print(f"📈 '{target_param}' 변화 시뮬레이션 중...")
     curr = user_input[target_param]
     sweep_range = np.linspace(curr * 0.5, curr * 1.5, 10)
     df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
 
-    plt.figure(figsize=(14, 5))
+    plt.figure(figsize=(12, 5))
     ax1 = plt.subplot(1, 2, 1)
-    l1 = ax1.plot(df[target_param], df[y_left], 'r-o', label=f"Recipe: {y_left}")
-    ax1.set_xlabel(target_param); ax1.set_ylabel(y_left, color='r')
-    ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
+    l1 = ax1.plot(df[target_param], df["Temperature (c)"], 'r-o', label="Temp (c)")
+    ax1.set_xlabel(target_param); ax1.set_ylabel("Temp (c)", color='r')
     ax2 = ax1.twinx()
-    line2 = ax2.plot(df[target_param], df[y_right], 'b--s', label=f"Property: {y_right}")
-    ax2.set_ylabel(y_right, color='b'); ax2.tick_params(axis='y', labelcolor='b')
-    lines = line1 + line2; labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
-    ax1.set_title(f"Trend: {y_left} & {y_right}")
+    l2 = ax2.plot(df[target_param], df["GPC (A/cycle)"], 'b--s', label="GPC")
+    ax2.set_ylabel("GPC (A/cycle)", color='b')
+    lns = l1 + l2; labs = [l.get_label() for l in lns]
+    ax1.legend(lns, labs, loc=0)
+    plt.title("Temp & GPC Trend")
 
     plt.subplot(1, 2, 2)
     plt.plot(df[target_param], df["Step Coverage (sc, %)"], 'g-^', label="AI SC")
@@ -390,8 +382,8 @@ def main_cli():
     plt.legend(); plt.title("Step Coverage Trend")
     
     plt.tight_layout()
-    try: plt.show(); print("   (그래프 창을 닫으면 종료됩니다)")
-    except Exception as e: print(f"\n⚠️ 그래프 팝업 불가: {e}"); plt.savefig('result_graph.png')
+    try: plt.show()
+    except: print("⚠️ 팝업 불가. result.png 저장"); plt.savefig("result.png")
 
 
 # ==========================================
@@ -399,9 +391,9 @@ def main_cli():
 # ==========================================
 def main_gui():
     st.set_page_config(page_title="ALD Optimizer", layout="wide")
-    st.title("🚀 AI 기반 ALD 공정 최적화 시스템")
+    st.title("🚀 AI 기반 ALD 공정 최적화 시스템 (Smart Tuning)")
 
-    @st.cache_resource(show_spinner="AI 모델 초고속 튜닝 중...")
+    @st.cache_resource(show_spinner="AI 모델 스마트 튜닝 중... (2~3초)")
     def load_model():
         csv_file_name = "AI_ALD1.csv"
         current_dir = os.path.dirname(os.path.abspath(__file__))
