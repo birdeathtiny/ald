@@ -36,7 +36,7 @@ class ALDOptimizer:
     def __init__(self, file_path: str, mode: str = "cli"):
         self.mode = mode
         if self.mode == "cli":
-            print(f"--- [Real-Time Tuning Mode] 데이터 로드 및 실시간 최적화 학습 시작 ---")
+            print(f"--- [Smart Real-Tuning] 데이터 로드 및 실시간 AI 학습 시작 ---")
         
         self.DEFAULT_GPC_GUESS_A = 1.0 
         self.X_scaler = StandardScaler()
@@ -45,7 +45,7 @@ class ALDOptimizer:
         self.ALL_INPUT_FEATURES_ORDERED = []
         self.ALL_OUTPUT_FEATURES_ORDERED = []
         self.performance_metrics = {}
-        self.best_params = {}
+        self.best_params = {} 
         
         # 1. 데이터 로드
         df_encoded = self._load_and_preprocess(file_path)
@@ -53,8 +53,8 @@ class ALDOptimizer:
         # 2. 데이터셋 준비
         self._prepare_datasets(df_encoded)
         
-        # 3. 모델 학습 (실시간 튜닝 수행)
-        self._train_model_live_tuning()
+        # 3. 모델 학습 (실제 튜닝 수행)
+        self._train_model_smart_tuning()
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -125,46 +125,49 @@ class ALDOptimizer:
         if self.mode == "cli":
             print(f"✅ 데이터 로드 완료 (입력: {X.shape[1]}개, 출력: {Y.shape[1]}개)")
 
-    def _train_model_live_tuning(self):
+    def _train_model_smart_tuning(self):
         """
-        [Live Tuning]
-        - 0.5초 컷 (X) / 1분 소요 (X)
-        - 5~10초 소요 (O): 실제로 RandomizedSearchCV를 돌립니다.
-        - n_iter=5: 5번의 핵심 실험을 수행하여 현재 데이터에 가장 적합한 파라미터를 찾습니다.
+        [Smart Real-Tuning Logic]
+        1. 0.5초 컷 X -> 실제 탐색 수행
+        2. 무한 대기 X -> 'Thickness' 타겟을 기준으로 최적 파라미터를 먼저 찾고(약 3~5초),
+           그 파라미터를 전체 모델에 적용하여 최종 학습(약 1~2초).
         """
         if self.mode == "cli": 
-            print("--- 🧠 AI가 최적의 모델을 탐색하고 있습니다 (약 5~10초 소요)... ---")
+            print("--- 🧠 AI가 최적의 학습 파라미터를 탐색 중입니다... (약 5~8초 소요) ---")
         
-        # 1. 탐색할 파라미터 범위 (핵심만)
+        # 1. 탐색할 파라미터 범위 (핵심 하이퍼파라미터)
         param_dist = {
-            'n_estimators': [200, 400, 600],          # 나무 개수
-            'learning_rate': [0.03, 0.05, 0.1],       # 학습 속도
-            'max_depth': [4, 6, 8],                   # 깊이
-            'subsample': [0.7, 0.9],                  # 샘플링
-            'colsample_bytree': [0.7, 0.9]            # 컬럼 샘플링
+            'n_estimators': [200, 300, 500],          # 나무 개수
+            'learning_rate': [0.03, 0.05, 0.1, 0.2],  # 학습 속도
+            'max_depth': [4, 5, 6, 7],                # 나무 깊이
+            'min_child_weight': [1, 3],               # 과적합 방지
+            'subsample': [0.7, 0.8, 0.9],             # 데이터 샘플링
+            'colsample_bytree': [0.7, 0.8, 0.9]       # 컬럼 샘플링
         }
         
-        # 2. 실제 탐색 수행 (RandomizedSearchCV)
-        # MultiOutputRegressor는 직접 CV가 안되므로, 대표 타겟(두께 등)으로 튜닝 후 전체 적용
+        # 2. RandomizedSearchCV 수행
+        # n_iter=10: 10번의 무작위 실험을 수행하여 최고 점수를 찾음
         search = RandomizedSearchCV(
             estimator=xgb.XGBRegressor(n_jobs=-1, random_state=42),
             param_distributions=param_dist,
-            n_iter=5,  # 💡 5번의 실험 (적절한 부하)
-            cv=2,      # 2-Fold 교차 검증
+            n_iter=10,  # 💡 10번 실험 (너무 오래 안 걸리면서 충분한 탐색)
+            cv=3,       # 3-Fold 교차 검증
             scoring='neg_mean_squared_error',
             verbose=0,
             random_state=42,
             n_jobs=-1
         )
         
-        # 튜닝 실행 (실제 연산 발생)
-        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0]) # 0번 타겟 기준
+        # 💡 속도 비결: 대표 타겟(0번 인덱스, 보통 Thickness)으로 튜닝
+        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0]) 
+        
         self.best_params = search.best_params_
         
         if self.mode == "cli":
             print(f"✨ 최적 파라미터 발견: {self.best_params}")
+            print("--- 🤖 최적 파라미터로 전체 모델 재학습 중... ---")
         
-        # 3. 찾은 파라미터로 전체 모델 학습
+        # 3. 찾은 파라미터로 전체 타겟(9개) 학습
         self.model = MultiOutputRegressor(xgb.XGBRegressor(**self.best_params, n_jobs=-1, random_state=42))
         self.model.fit(self.X_train_scaled, self.Y_train_scaled)
         
@@ -203,9 +206,9 @@ class ALDOptimizer:
         d = const["diameter_m"]; M_kg = const["mass_g_mol"] / 1000.0 / N_A
         T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
         L_m = AR_value * CD_m
-        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg))
-        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
-        D_eff = 1.0 / ((1.0 / ((1/3)*lambda_m*v_avg + 1e-30)) + (1.0 / ((1/3)*v_avg*CD_m + 1e-30)))
+        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg)); lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
+        D_A = (1.0 / 3.0) * lambda_m * v_avg; D_Kn = (1.0 / 3.0) * v_avg * CD_m
+        D_eff = 1.0 / ((1.0 / (D_A + 1e-30)) + (1.0 / (D_Kn + 1e-30)))
         lambda_pen = np.sqrt(D_eff * Pulse_Time_s + 1e-30)
         phi = L_m / (lambda_pen + 1e-30)
         if phi < 1.0: SC_fraction = 1.0 / (1.0 + phi); mode = "Reaction Limited (RDS, φ < 1)"
@@ -264,7 +267,7 @@ class ALDOptimizer:
             print(f"\n--- 🔍 최적화 탐색 시작 ---")
 
         args = (user_input, co_reactant, purge_gas, COST_WEIGHTS, initial_cycles)
-        # 💡 maxiter 30: 최적화도 적당히 수행
+        # 💡 maxiter 30: 충분한 탐색
         result = minimize(self._objective_function, initial_guess, args=args, method='SLSQP', bounds=bounds,
                           constraints={'type': 'ineq', 'fun': self._constraint_sc, 'args': args}, options={'maxiter': 30, 'eps': 1e-6})
         
@@ -322,7 +325,7 @@ class ALDOptimizer:
 # 🖥️ CLI 모드 실행 함수
 # ==========================================
 def main_cli():
-    print("\n" + "="*50 + "\n  [CLI] ALD Optimizer (Real-Time Tuning)\n" + "="*50)
+    print("\n" + "="*50 + "\n  [CLI] ALD Optimizer (Smart Real-Tuning)\n" + "="*50)
     
     import matplotlib
     try: matplotlib.use('TkAgg')
@@ -332,7 +335,6 @@ def main_cli():
     if not os.path.exists(csv_file):
         print(f"[오류] '{csv_file}' 파일이 없습니다."); return
     
-    # 여기서 5~10초 학습 진행
     optimizer = ALDOptimizer(file_path=csv_file, mode="cli")
     print(f"📊 모델 정확도 (R2): {optimizer.performance_metrics['R2']:.4f}")
 
@@ -362,22 +364,36 @@ def main_cli():
     except: x_idx = 0
     target_param = x_opts[x_idx]
 
-    print(f"📈 '{target_param}' 변화 시뮬레이션 중...")
+    y_left_opts = ["Temperature (c)", "Pressure (torr)", "Pulse Time (s)", "Purge Time (s)", "Cycles (n)"]
+    print("\n[2] 왼쪽 Y축 (최적 공정 조건) 선택:")
+    for i, opt in enumerate(y_left_opts, 1): print(f"  {i}. {opt}")
+    try: yl_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
+    except: yl_idx = 0
+    y_left = y_left_opts[yl_idx] if 0 <= yl_idx < len(y_left_opts) else y_left_opts[0]
+
+    y_right_opts = ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"]
+    print("\n[3] 오른쪽 Y축 (예측 물성) 선택:")
+    for i, opt in enumerate(y_right_opts, 1): print(f"  {i}. {opt}")
+    try: yr_idx = int(input("  => 번호 입력 (기본 1): ")) - 1
+    except: yr_idx = 0
+    y_right = y_right_opts[yr_idx] if 0 <= yr_idx < len(y_right_opts) else y_right_opts[0]
+
+    print(f"\n📈 '{target_param}' 변화에 따른 시뮬레이션 진행 중...")
     curr = user_input[target_param]
     sweep_range = np.linspace(curr * 0.5, curr * 1.5, 10)
     df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
 
-    plt.figure(figsize=(12, 5))
-    
+    plt.figure(figsize=(14, 5))
     ax1 = plt.subplot(1, 2, 1)
-    l1 = ax1.plot(df[target_param], df["Temperature (c)"], 'r-o', label="Temp (c)")
-    ax1.set_xlabel(target_param); ax1.set_ylabel("Temp (c)", color='r')
+    line1 = ax1.plot(df[target_param], df[y_left], 'r-o', label=f"Recipe: {y_left}")
+    ax1.set_xlabel(target_param); ax1.set_ylabel(y_left, color='r')
+    ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
     ax2 = ax1.twinx()
-    l2 = ax2.plot(df[target_param], df["GPC (A/cycle)"], 'b--s', label="GPC")
-    ax2.set_ylabel("GPC (A/cycle)", color='b')
-    lns = l1 + l2; labs = [l.get_label() for l in lns]
-    ax1.legend(lns, labs, loc=0)
-    plt.title("Temp & GPC Trend")
+    line2 = ax2.plot(df[target_param], df[y_right], 'b--s', label=f"Property: {y_right}")
+    ax2.set_ylabel(y_right, color='b'); ax2.tick_params(axis='y', labelcolor='b')
+    lines = line1 + line2; labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
+    ax1.set_title(f"Trend: {y_left} & {y_right}")
 
     plt.subplot(1, 2, 2)
     plt.plot(df[target_param], df["Step Coverage (sc, %)"], 'g-^', label="AI SC")
@@ -390,13 +406,13 @@ def main_cli():
 
 
 # ==========================================
-# 🌐 GUI 모드
+# 🌐 GUI 모드 (Streamlit)
 # ==========================================
 def main_gui():
     st.set_page_config(page_title="ALD Optimizer", layout="wide")
-    st.title("🚀 AI 기반 ALD 공정 최적화 시스템 (Real-Time Tuning)")
+    st.title("🚀 AI 기반 ALD 공정 최적화 시스템 (Smart Tuning)")
 
-    @st.cache_resource(show_spinner="AI 실시간 최적화 학습 중 (약 5~10초)...")
+    @st.cache_resource(show_spinner="AI 모델 스마트 튜닝 중 (약 5~8초)...")
     def load_model():
         csv_file_name = "AI_ALD1.csv"
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -413,16 +429,30 @@ def main_gui():
     ar = st.sidebar.number_input("AR", 1.0, 100.0, 10.0)
     cd = st.sidebar.number_input("CD (nm)", 1.0, 1000.0, 100.0)
 
-    if 'res' not in st.session_state: st.session_state.res = None
+    if 'opt_done' not in st.session_state:
+        st.session_state['opt_done'] = False
+        st.session_state['opt_recipe'] = None
+        st.session_state['pred_results'] = None
+        st.session_state['val_data'] = None
+        st.session_state['opt_stats'] = None
+        st.session_state['user_input'] = None
 
     if st.sidebar.button("최적화 실행", type="primary"):
+        user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
         with st.spinner("최적해 탐색 중..."):
-            u_in = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-            rec, pred, val = optimizer.generate_optimal_recipe(u_in)
-            st.session_state.res = (rec, pred, val, u_in)
+            rec, pred, val, stats = optimizer.generate_optimal_recipe(user_input=user_input)
+            st.session_state['opt_recipe'] = rec
+            st.session_state['pred_results'] = pred
+            st.session_state['val_data'] = val
+            st.session_state['opt_stats'] = stats
+            st.session_state['user_input'] = user_input
+            st.session_state['opt_done'] = True
 
-    if st.session_state.res:
-        rec, pred, val, u_in = st.session_state.res
+    if st.session_state['opt_done']:
+        rec = st.session_state.opt_recipe
+        pred = st.session_state.pred_results
+        val = st.session_state.val_data
+        u_in = st.session_state.user_input
         
         tab1, tab2 = st.tabs(["결과 리포트", "시뮬레이션 그래프"])
         
@@ -449,7 +479,7 @@ def main_gui():
             y2 = col3.selectbox("Y2 (우측)", ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)"])
 
             if st.button("🔄 그래프 업데이트"):
-                with st.spinner("시뮬레이션..."):
+                with st.spinner("시뮬레이션 중..."):
                     curr = u_in[target]
                     rng = np.linspace(curr*0.5, curr*1.5, 10)
                     df = optimizer.simulate_target_sweep(u_in, target, rng)
