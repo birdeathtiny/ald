@@ -1,13 +1,13 @@
 # ==============================================================================
-#  [Enterprise-Grade] AI ALD Process Optimization System (End-Game Ver.)
+#  [Enterprise-Grade] AI ALD Process Optimization System (Magnum Opus v35)
 # ==============================================================================
-#  Architecture:
-#  1. Config & Logger: Centralized configuration and logging mechanism.
-#  2. ALDDataManager: ETL pipeline (Extract, Transform, Load) with Feature Eng.
-#  3. ALDModelCore: XGBoost engine with Model Persistence (Save/Load logic).
-#  4. ALDPhysics: Theoretical validation layer using Langmuir/Knudsen models.
-#  5. ALDOptimizer: Inverse design engine using SLSQP constraints.
-#  6. Interface: Dual-mode support (CLI & Streamlit GUI).
+#  Project Structure:
+#  1. Config & Logger: System-wide configuration and robust logging.
+#  2. ALDDataManager: ETL Pipeline, Feature Engineering (Poly), Scaling.
+#  3. ALDModelCore: High-Performance XGBoost Engine (Real Training).
+#  4. ALDPhysics: Theoretical Validation Layer (Langmuir, Knudsen).
+#  5. ALDOptimizer: Inverse Design Engine using Constrained Optimization (SLSQP).
+#  6. Interface: Dual-Mode Support (CLI & Streamlit GUI) with Auto-Detection.
 # ==============================================================================
 
 import streamlit as st
@@ -16,9 +16,11 @@ import pandas as pd
 import sys
 import os
 import time
-import joblib  # For Model Persistence
 import warnings
+import joblib
 import matplotlib
+
+# Configure Matplotlib Backend for CLI vs GUI
 if "streamlit" not in sys.modules:
     try: matplotlib.use('TkAgg')
     except: pass
@@ -26,26 +28,25 @@ import matplotlib.pyplot as plt
 
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.impute import KNNImputer
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.multioutput import MultiOutputRegressor
 import xgboost as xgb
 from scipy.optimize import minimize
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
-# Suppress minor warnings
+# Suppress warnings for clean output
 warnings.filterwarnings('ignore')
 
-# ==========================================
-# 0. Configuration & Logging
-# ==========================================
+# ==============================================================================
+#  0. Configuration & Logging System
+# ==============================================================================
 class Config:
     APP_NAME = "Enterprise ALD Optimizer"
-    VERSION = "v33.0.0"
-    MODEL_FILE = "ald_xgboost_model.pkl"
-    SCALER_X_FILE = "ald_scaler_x.pkl"
-    SCALER_Y_FILE = "ald_scaler_y.pkl"
+    VERSION = "v35.0.0 (Magnum Opus)"
+    DATA_FILE = "AI_ALD1.csv"
     
+    # Physics Constants
     PRECURSOR_CONSTANTS = {
         "TMA": {"mass_g_mol": 72.12, "diameter_m": 5.0e-10, "sticking_c": 0.005},
         "TDMAH": {"mass_g_mol": 204.37, "diameter_m": 8.5e-10, "sticking_c": 0.001},
@@ -56,58 +57,68 @@ class Config:
     k_B = 1.38e-23
 
 class Logger:
+    """Centralized Logging System for CLI and GUI"""
     def __init__(self, mode="cli"):
         self.mode = mode
 
-    def info(self, msg):
+    def info(self, msg: str):
         timestamp = time.strftime("%H:%M:%S")
-        log_msg = f"[{timestamp}] ℹ️ {msg}"
-        if self.mode == "cli": print(log_msg)
-        elif self.mode == "gui": st.toast(msg)
+        if self.mode == "cli": print(f"[{timestamp}] ℹ️  {msg}")
+        elif self.mode == "gui": st.toast(f"ℹ️ {msg}")
 
-    def error(self, msg):
+    def success(self, msg: str):
+        if self.mode == "cli": print(f"✅ {msg}")
+        elif self.mode == "gui": st.success(msg)
+
+    def error(self, msg: str, stop=True):
         timestamp = time.strftime("%H:%M:%S")
-        log_msg = f"[{timestamp}] ❌ {msg}"
-        if self.mode == "cli": print(log_msg); sys.exit(1)
-        else: st.error(msg); st.stop()
+        if self.mode == "cli": 
+            print(f"[{timestamp}] ❌ {msg}")
+            if stop: sys.exit(1)
+        elif self.mode == "gui": 
+            st.error(f"❌ {msg}")
+            if stop: st.stop()
 
-    def warning(self, msg):
-        if self.mode == "cli": print(f"⚠️ {msg}")
-        else: st.warning(msg)
 
-# ==========================================
-# 1. Data Management Layer
-# ==========================================
+# ==============================================================================
+#  1. Data Management Layer (ETL & Feature Engineering)
+# ==============================================================================
 class ALDDataManager:
     def __init__(self, file_path: str, logger: Logger):
         self.logger = logger
         self.file_path = file_path
-        self.poly = PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)
+        
+        # Feature Engineering Tools
         self.X_scaler = StandardScaler()
         self.Y_scaler = StandardScaler()
+        self.poly = PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)
         
-        self._load_data()
-        self._preprocess_pipeline()
+        self._extract_data()
+        self._transform_data()
 
-    def _load_data(self):
+    def _extract_data(self):
+        """Robust file loading mechanism"""
         if not os.path.exists(self.file_path):
-            # Fallback search
-            curr = os.path.dirname(os.path.abspath(__file__))
-            alt = os.path.join(curr, os.path.basename(self.file_path))
-            if os.path.exists(alt): self.file_path = alt
-            else: self.logger.error(f"Data file not found: {self.file_path}")
-            
+            # Try current directory fallback
+            curr_dir = os.path.dirname(os.path.abspath(__file__))
+            alt_path = os.path.join(curr_dir, os.path.basename(self.file_path))
+            if os.path.exists(alt_path):
+                self.file_path = alt_path
+            else:
+                self.logger.error(f"Data file not found: {self.file_path}")
+                
         try: 
             self.df = pd.read_csv(self.file_path, encoding='CP949')
         except: 
             self.df = pd.read_csv(self.file_path)
-        
-        self.logger.info(f"Data Loaded: {len(self.df)} rows found.")
+            
+        self.logger.info(f"Data Successfully Loaded: {len(self.df)} records.")
 
-    def _preprocess_pipeline(self):
-        # 1. Cleaning
+    def _transform_data(self):
+        """Preprocessing pipeline: Cleaning -> Encoding -> Imputing -> Scaling"""
         self.df.replace('-', np.nan, inplace=True)
         
+        # 1. Numeric Conversion
         numeric_cols = [
             'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
             'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)', 'Thickness (nm)', 
@@ -118,358 +129,356 @@ class ALDDataManager:
         for c in numeric_cols:
             if c in self.df.columns: self.df[c] = pd.to_numeric(self.df[c], errors='coerce')
 
-        # 2. Categorical Processing
+        # 2. Categorical Handling
         if 'Co-reactant' in self.df.columns:
             self.df['Co-reactant'] = self.df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
             
-        # 3. Feature Selection
+        # 3. Dropping Irrelevant Columns
+        drop_cols = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', '순서']
+        self.df.drop(columns=[c for c in drop_cols if c in self.df.columns], inplace=True, errors='ignore')
+        
+        # 4. One-Hot Encoding
+        cat_cols = [c for c in ['Precursor', 'Co-reactant', 'Purge Gas'] if c in self.df.columns]
+        self.df_encoded = pd.get_dummies(self.df, columns=cat_cols, dummy_na=False)
+
+        # 5. Feature/Target Split
         self.target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)', 'Step Coverage (sc, %)'
         ]
-        self.ignore_cols = ['Aspect Ratio (AR)', 'Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', '순서']
+        self.ignore_cols = ['Aspect Ratio (AR)', 'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)', 'Breakdown Field (MV/cm)']
         
-        # Safe Drop
-        self.df.drop(columns=[c for c in self.ignore_cols if c in self.df.columns], inplace=True)
-        
-        # One-Hot Encoding
-        cat_cols = [c for c in ['Precursor', 'Co-reactant', 'Purge Gas'] if c in self.df.columns]
-        self.df_encoded = pd.get_dummies(self.df, columns=cat_cols, dummy_na=False)
-
-        # Final Feature Sets
         self.targets = [c for c in self.target_cols if c in self.df_encoded.columns]
-        self.inputs = self.df_encoded.drop(columns=self.targets, errors='ignore').columns.tolist()
+        self.inputs = self.df_encoded.drop(columns=self.targets + [c for c in self.ignore_cols if c in self.df_encoded.columns], errors='ignore').columns.tolist()
 
         X_raw = self.df_encoded[self.inputs].values
         Y_raw = self.df_encoded[self.targets].values
         
-        # 4. Advanced Feature Engineering
-        # Imputation
-        imp = KNNImputer(n_neighbors=5)
-        X_imp = imp.fit_transform(X_raw)
-        Y_imp = imp.fit_transform(Y_raw)
+        # 6. Imputation & Feature Engineering (Polynomial)
+        imputer_x = KNNImputer(n_neighbors=5)
+        X_imputed = imputer_x.fit_transform(X_raw)
         
-        # Polynomial Features
-        X_poly = self.poly.fit_transform(X_imp)
+        # 💡 Generating Interaction Features (e.g., Temp * Pressure)
+        X_poly = self.poly.fit_transform(X_imputed)
         self.feature_names = self.poly.get_feature_names_out(self.inputs)
-
-        # 5. Splitting
-        self.X_train, self.X_test, self.Y_train, self.Y_test = train_test_split(
-            X_poly, Y_imp, test_size=0.2, random_state=42
-        )
-        self.Y_test_raw = self.Y_scaler.inverse_transform(self.Y_scaler.fit_transform(self.Y_test)) # Hack for scaler fitting
         
-        # Scale Fitting
-        self.X_train_s = self.X_scaler.fit_transform(self.X_train)
-        self.X_test_s = self.X_scaler.transform(self.X_test)
-        self.Y_train_s = self.Y_scaler.fit_transform(self.Y_train)
+        imputer_y = KNNImputer(n_neighbors=5)
+        Y_imputed = imputer_y.fit_transform(Y_raw)
+
+        # 7. Scaling & Train/Test Split
+        self.X_train, self.X_test, self.Y_train, self.Y_test = train_test_split(
+            self.X_scaler.fit_transform(X_poly), 
+            self.Y_scaler.fit_transform(Y_imputed), 
+            test_size=0.2, random_state=42
+        )
+        # Keep raw Y_test for accurate evaluation
+        self.Y_test_raw = self.Y_scaler.inverse_transform(self.Y_test)
+        
+        self.logger.info(f"Preprocessing Complete. Features Expanded: {X_raw.shape[1]} -> {X_poly.shape[1]}")
 
 
-# ==========================================
-# 2. Model Management Layer (Persistence)
-# ==========================================
+# ==============================================================================
+#  Class 2: Model Core Layer (XGBoost Engine)
+# ==============================================================================
 class ALDXGBoostModel:
-    def __init__(self, dm: ALDDataManager, logger: Logger, force_retrain=False):
+    def __init__(self, dm: ALDDataManager, logger: Logger):
         self.dm = dm
         self.logger = logger
         self.model = None
         self.metrics = {}
-        
-        if force_retrain or not os.path.exists(Config.MODEL_FILE):
-            self._train_new_model()
-        else:
-            self._load_model()
+        self._train_model()
 
-    def _train_new_model(self):
-        self.logger.info("🧠 Starting New Model Training (Smart Tuning)...")
+    def _train_model(self):
+        """
+        Trains a Multi-Output XGBoost Regressor.
+        Uses industry-standard high-performance hyperparameters for balance between speed and accuracy.
+        """
+        self.logger.info("🤖 Initializing & Training AI Model (XGBoost)...")
         
-        # Smart Tuning Logic (thickness based)
-        xgb_base = xgb.XGBRegressor(n_jobs=-1, random_state=42)
-        param_dist = {
-            'n_estimators': [200, 400, 600],
-            'learning_rate': [0.03, 0.05, 0.1],
-            'max_depth': [4, 6, 8],
-            'subsample': [0.7, 0.9],
-            'colsample_bytree': [0.7, 0.9]
+        # 💡 High-Performance Parameters (No Time-Wasting Search, Just Real Learning)
+        xgb_params = {
+            'n_estimators': 300,      # Robust number of trees
+            'learning_rate': 0.05,    # Stable learning rate
+            'max_depth': 6,           # Capture complex interactions
+            'subsample': 0.85,        # Generalization
+            'colsample_bytree': 0.85, # Feature diversity
+            'n_jobs': -1,             # Use all CPU cores
+            'random_state': 42
         }
         
-        search = RandomizedSearchCV(
-            estimator=xgb_base,
-            param_distributions=param_dist,
-            n_iter=5, cv=2, verbose=0, random_state=42, scoring='neg_mean_squared_error', n_jobs=-1
-        )
-        
-        # Tune on first target
-        search.fit(self.dm.X_train_s, self.dm.Y_train_s[:, 0])
-        best_params = search.best_params_
-        self.logger.info(f"Optimized Hyperparams: {best_params}")
-        
-        # Train Final Model
-        self.model = MultiOutputRegressor(xgb.XGBRegressor(**best_params, n_jobs=-1, random_state=42))
-        self.model.fit(self.dm.X_train_s, self.dm.Y_train_s)
+        # Train Multi-Output Model
+        self.model = MultiOutputRegressor(xgb.XGBRegressor(**xgb_params))
+        self.model.fit(self.dm.X_train, self.dm.Y_train)
         
         # Evaluate
-        self._evaluate()
+        pred_scaled = self.model.predict(self.dm.X_test)
+        pred = self.dm.Y_scaler.inverse_transform(pred_scaled)
         
-        # Save Model
-        self._save_model()
-
-    def _evaluate(self):
-        pred_s = self.model.predict(self.dm.X_test_s)
-        pred = self.dm.Y_scaler.inverse_transform(pred_s)
         r2 = r2_score(self.dm.Y_test_raw, pred)
-        self.metrics['R2'] = r2
-        self.logger.info(f"Model Evaluation Completed. R2: {r2:.4f}")
+        rmse = np.sqrt(mean_squared_error(self.dm.Y_test_raw, pred))
+        self.metrics = {'R2': r2, 'RMSE': rmse}
+        
+        self.logger.success(f"AI Training Complete. Accuracy (R2): {r2:.4f}")
 
-    def _save_model(self):
-        try:
-            joblib.dump(self.model, Config.MODEL_FILE)
-            joblib.dump(self.dm.X_scaler, Config.SCALER_X_FILE)
-            joblib.dump(self.dm.Y_scaler, Config.SCALER_Y_FILE)
-            self.logger.info("💾 Model Saved Successfully.")
-        except Exception as e:
-            self.logger.warning(f"Failed to save model: {e}")
-
-    def _load_model(self):
-        try:
-            self.logger.info("📂 Loading pre-trained model...")
-            self.model = joblib.load(Config.MODEL_FILE)
-            # Overwrite data manager scalers with trained ones to ensure consistency
-            self.dm.X_scaler = joblib.load(Config.SCALER_X_FILE)
-            self.dm.Y_scaler = joblib.load(Config.SCALER_Y_FILE)
-            self._evaluate()
-        except Exception as e:
-            self.logger.warning(f"Load failed ({e}). Retraining...")
-            self._train_new_model()
-
-    def predict(self, input_vector):
+    def predict(self, input_vector: np.ndarray) -> np.ndarray:
+        """Predicts outputs for a given input vector (with feature engineering applied)"""
         x_poly = self.dm.poly.transform(input_vector)
-        x_s = self.dm.X_scaler.transform(x_poly)
-        y_s = self.model.predict(x_s)
-        return self.dm.Y_scaler.inverse_transform(y_s)[0]
+        x_scaled = self.dm.X_scaler.transform(x_poly)
+        y_scaled = self.model.predict(x_scaled)
+        return self.dm.Y_scaler.inverse_transform(y_scaled)[0]
 
-    def get_feature_importance(self):
+    def get_feature_importance(self) -> Tuple[List[str], List[float]]:
+        """Extracts feature importance from the model"""
         try:
-            # Average importance across all estimators
-            imps = np.mean([est.feature_importances_ for est in self.model.estimators_], axis=0)
-            idxs = np.argsort(imps)[::-1][:10]
-            return [self.dm.feature_names[i] for i in idxs], imps[idxs]
-        except: return [], []
+            # Average importance across all target estimators
+            importances = np.mean([est.feature_importances_ for est in self.model.estimators_], axis=0)
+            indices = np.argsort(importances)[::-1][:10] # Top 10
+            return [self.dm.feature_names[i] for i in indices], importances[indices]
+        except:
+            return [], []
 
 
-# ==========================================
-# 3. Physics Engine Layer
-# ==========================================
+# ==============================================================================
+#  Class 3: Physics Engine Layer
+# ==============================================================================
 class ALDPhysics:
     @staticmethod
     def calculate_sc(P, T, Pulse, AR, Precursor, CD_nm):
         """
-        Calculates theoretical Step Coverage based on Langmuir & Knudsen diffusion models.
+        Calculates theoretical Step Coverage using Langmuir-Knudsen Diffusion Model.
         """
         try:
             const = Config.PRECURSOR_CONSTANTS.get(Precursor, Config.PRECURSOR_CONSTANTS["TMA"])
             T_K = T + 273.15
             P_Pa = P * 133.322
-            L = AR * (CD_nm * 1e-9)
-            d = const["diameter_m"]
-            m = const["mass_g_mol"] / 1000 / Config.N_A
+            L_m = AR * (CD_nm * 1e-9)
             
-            v_avg = np.sqrt(8 * Config.k_B * T_K / (np.pi * m))
+            # Molecular parameters
+            d = const["diameter_m"]
+            m_kg = const["mass_g_mol"] / 1000.0 / Config.N_A
+            
+            # Kinetic theory
+            v_avg = np.sqrt(8 * Config.k_B * T_K / (np.pi * m_kg))
             lambda_m = (Config.k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
             
+            # Diffusion Coefficients
             D_Kn = (1.0/3.0) * v_avg * (CD_nm * 1e-9)
             D_bulk = (1.0/3.0) * lambda_m * v_avg
             D_eff = 1.0 / (1.0/D_Kn + 1.0/D_bulk)
             
-            lambda_pen = np.sqrt(D_eff * Pulse + 1e-15)
-            phi = L / (lambda_pen + 1e-15)
+            # Penetration & Thiele Modulus
+            penetration_depth = np.sqrt(D_eff * Pulse + 1e-15)
+            phi = L_m / (penetration_depth + 1e-15)
             
-            if phi < 1.0: return 100.0 / (1.0 + phi) # Reaction rate limited
-            else: return np.exp(-phi) * 100.0        # Diffusion limited
+            # SC Calculation
+            if phi < 1.0: return 100.0 / (1.0 + phi) # Reaction Limited
+            else: return np.exp(-phi) * 100.0        # Diffusion Limited
         except: return 0.0
 
 
-# ==========================================
-# 4. Optimization Engine Layer
-# ==========================================
+# ==============================================================================
+#  Class 4: Optimization Engine (Inverse Design)
+# ==============================================================================
 class ALDOptimizer:
     def __init__(self, dm: ALDDataManager, mm: ALDXGBoostModel):
         self.dm = dm
         self.mm = mm
 
-    def _build_input_vector(self, params, user_in):
+    def _construct_input_vector(self, params: Dict, user_in: Dict):
+        """Builds the input vector matching training data structure"""
         row = pd.DataFrame(0.0, index=[0], columns=self.dm.inputs)
+        
+        # Fill numerical values
         for k, v in params.items():
             if k in row.columns: row.at[0, k] = v
         
-        # One-Hot Encoding Injection
+        # Fill One-Hot encoded values
         p_col = f"Precursor_{user_in['Precursor']}"
         if p_col in row.columns: row.at[0, p_col] = 1.0
-        # Defaulting to H2O/N2 for simplicity in optimizer
+        
+        # Defaults for Co-reactant/Purge (simplified)
         if "Co-reactant_H2O" in row.columns: row.at[0, "Co-reactant_H2O"] = 1.0
         if "Purge Gas_N2" in row.columns: row.at[0, "Purge Gas_N2"] = 1.0
         
         return row.values
 
-    def optimize_recipe(self, user_in):
-        init_cycles = max(10, int(user_in["Thickness (nm)"] * 10))
+    def optimize_recipe(self, user_in: Dict) -> Tuple[Dict, Dict, Dict]:
+        """Finds the optimal recipe for target thickness & AR"""
         
-        def objective(x):
-            # x: [Temp, Pressure, Pulse, PurgeT, PurgeF]
-            p = {
+        init_cycles = max(10, int(user_in["Thickness (nm)"] * 10)) # Rough guess
+        
+        def objective_function(x):
+            # x = [Temp, Pressure, Pulse, PurgeT, PurgeF]
+            params = {
                 "Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
                 "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
                 "Cycles (n)": init_cycles, "Co-reactant_Pulse Time (s)": x[2]
             }
             try:
-                vec = self._build_input_vector(p, user_in)
-                pred = self.mm.predict(vec)
-                res = dict(zip(self.dm.targets, pred))
+                vec = self._construct_input_vector(params, user_in)
+                pred_vals = self.mm.predict(vec)
+                res = dict(zip(self.dm.targets, pred_vals))
                 
-                # Cost: GPC Target Error + Surface Roughness
+                # Target: Minimize GPC error & Roughness
                 target_gpc = (user_in["Thickness (nm)"] * 10) / init_cycles
-                cost_gpc = (res.get('GPC (A/cycle)', 0.1) - target_gpc)**2
-                cost_rough = res.get('Surface Roughness (RMS, nm)', 1.0)**2
+                gpc_loss = (res.get('GPC (A/cycle)', 0.1) - target_gpc)**2
+                rough_loss = res.get('Surface Roughness (RMS, nm)', 1.0)**2
                 
-                return 10000 * cost_gpc + 10 * cost_rough
+                return 10000.0 * gpc_loss + 10.0 * rough_loss
             except: return 1e9
 
-        # Optimized Bounds
-        bounds = [(150, 450), (0.01, 2.0), (0.05, 3.0), (1.0, 20.0), (50, 1000)]
+        # Search Bounds
+        bounds = [(150, 450), (0.01, 3.0), (0.05, 5.0), (1.0, 60.0), (50, 1000)]
         x0 = [300, 0.5, 0.1, 5.0, 200]
         
-        res = minimize(objective, x0, method='SLSQP', bounds=bounds, options={'maxiter': 30})
+        # Run SLSQP Optimization
+        res = minimize(objective_function, x0, method='SLSQP', bounds=bounds, options={'maxiter': 30})
         
+        # Compile Result
         x = res.x
         opt_params = {
             "Temperature (c)": round(x[0], 1), "Pressure (torr)": round(x[1], 3),
             "Pulse (s)": round(x[2], 2), "Purge (s)": round(x[3], 1), "Flow (sccm)": int(x[4])
         }
         
-        # Recalculate Cycles & Prediction
-        vec = self._build_input_vector(opt_params, user_in)
-        final_pred = dict(zip(self.dm.targets, self.mm.predict(vec)))
+        # Inverse Calculate Exact Cycles
+        vec = self._construct_input_vector(opt_params, user_in)
+        final_pred_vals = self.mm.predict(vec)
+        final_pred_dict = dict(zip(self.dm.targets, final_pred_vals))
         
-        gpc = max(0.001, final_pred.get('GPC (A/cycle)', 0.1))
+        gpc = max(0.001, final_pred_dict.get('GPC (A/cycle)', 0.1))
         final_cycles = int(round((user_in["Thickness (nm)"] * 10) / gpc))
-        opt_params['Cycles (n)'] = final_cycles
-        final_pred['Thickness (nm)'] = (gpc * final_cycles) / 10.0
         
-        # Physics Validation
+        opt_params['Cycles (n)'] = final_cycles
+        final_pred_dict['Thickness (nm)'] = (gpc * final_cycles) / 10.0
+        
+        # Physics Check
         phys_sc = ALDPhysics.calculate_sc(x[1], x[0], x[2], user_in["Target AR"], user_in["Precursor"], user_in["CD (nm)"])
         
-        return opt_params, final_pred, {"Physics SC (%)": f"{phys_sc:.2f}%", "Cost": f"{res.fun:.4f}"}
+        return opt_params, final_pred_dict, {"Physics SC (%)": f"{phys_sc:.2f}%", "Optimization Cost": f"{res.fun:.4f}"}
 
     def run_simulation(self, user_in, target_col, sweep_range):
+        """Simulates process trends by sweeping a target variable"""
         data = []
         for val in sweep_range:
-            u = user_in.copy(); u[target_col] = val
-            r, p, v = self.optimize_recipe(u)
+            u_temp = user_in.copy()
+            u_temp[target_col] = val
+            rec, pred, val_data = self.optimize_recipe(u_temp)
             
             row = {target_col: val}
-            row.update(r); row.update(p)
-            row['Phys SC'] = float(v['Physics SC (%)'].replace('%',''))
+            row.update(rec)
+            row.update(pred)
+            row['Phys SC'] = float(val_data['Physics SC (%)'].replace('%',''))
             data.append(row)
         return pd.DataFrame(data)
 
 
 # ==============================================================================
-#  5. User Interface Layer (CLI / GUI)
+#  5. User Interface Layer (CLI & GUI)
 # ==============================================================================
 def main_cli():
     print("\n" + "="*70)
-    print(f"  🚀 {Config.APP_NAME} {Config.VERSION} (CLI Mode)")
+    print(f"  🚀 {Config.APP_NAME} (CLI Mode)")
     print("="*70)
     
     logger = Logger("cli")
-    csv_file = "AI_ALD1.csv"
     
-    dm = ALDDataManager(csv_file, "cli")
-    mm = ALDXGBoostModel(dm, logger) # Will load or train model
+    # Initialize System
+    dm = ALDDataManager(Config.DATA_FILE, logger)
+    mm = ALDXGBoostModel(dm, logger)
     opt = ALDOptimizer(dm, mm, "cli")
     
     print("-" * 70)
     try:
         th = float(input(">> Enter Target Thickness (nm): "))
-        ar = float(input(">> Enter Target AR: "))
-        cd = float(input(">> Enter CD (nm): "))
-    except: logger.error("Invalid Input"); return
+        ar = float(input(">> Enter Target Aspect Ratio (AR): "))
+        cd = float(input(">> Enter Critical Dimension (CD, nm): "))
+    except: logger.error("Invalid Input Format"); return
 
-    u_in = {"Precursor": "TMA", "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
+    # Precursor Selection
+    precursors = list(Config.PRECURSOR_CONSTANTS.keys())
+    print(f"\nSelect Precursor: {precursors}")
+    try:
+        p_idx = int(input(f">> Select (1-{len(precursors)}): ")) - 1
+        sel_p = precursors[p_idx]
+    except: sel_p = precursors[0]
+
+    u_in = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
+    
+    # Run Optimization
     rec, pred, val = opt.optimize_recipe(u_in)
     
-    print("\n[💡 Optimized Recipe]\n", pd.Series(rec).to_string())
-    print("\n[📈 AI Prediction]\n", pd.Series(pred).to_string())
-    print(f"\n[🔬 Physics Validation]: {val}")
+    print("\n" + "="*30 + " OPTIMIZATION RESULTS " + "="*30)
+    print(f"\n[💡 Optimal Recipe]\n{pd.Series(rec).to_string()}")
+    print(f"\n[📈 Predicted Properties]\n{pd.Series(pred).to_string()}")
+    print(f"\n[🔬 Validation]\n{val}")
     
-    print("\n📊 Generating Simulation Charts...")
-    sweep_x = np.linspace(th*0.5, th*1.5, 10)
-    df = opt.run_simulation(u_in, "Thickness (nm)", sweep_x)
+    # Simulation & Plotting
+    print("\n📊 generating simulation charts...")
+    df = opt.run_simulation(u_in, "Thickness (nm)", np.linspace(th*0.5, th*1.5, 10))
     
     fig, ax1 = plt.subplots(figsize=(12, 5))
     
+    # Plot 1: Recipe Trend
     plt.subplot(1, 2, 1)
     plt.plot(df["Thickness (nm)"], df["Temperature (c)"], 'r-o', label="Temp")
     plt.xlabel("Target Thickness"); plt.ylabel("Temp (c)", color='r')
     plt.twinx().plot(df["Thickness (nm)"], df["GPC (A/cycle)"], 'b-s', label="GPC")
-    plt.title("Process Window Trend")
+    plt.title("Process Trend")
     
+    # Plot 2: SC Validation
     plt.subplot(1, 2, 2)
-    plt.plot(df["Thickness (nm)"], df["Step Coverage (sc, %)"], 'g-^', label="AI SC")
-    plt.plot(df["Thickness (nm)"], df["Phys SC"], 'k--', label="Phys SC")
-    plt.legend(); plt.title("SC Reliability Check")
+    plt.plot(df["Thickness (nm)"], df["Step Coverage (sc, %)"], 'g-^', label="AI Prediction")
+    plt.plot(df["Thickness (nm)"], df["Phys SC"], 'k--', label="Physics Model")
+    plt.xlabel("Target Thickness"); plt.ylabel("Step Coverage (%)")
+    plt.legend(); plt.grid(True, alpha=0.3); plt.title("AI vs Physics Validation")
     
     plt.tight_layout()
     try: plt.show()
-    except: print("Plot failed. Saved to result.png"); plt.savefig("result.png")
+    except: print("Plot display failed. Saved to 'result.png'."); plt.savefig("result.png")
+
 
 def main_gui():
     st.set_page_config(page_title=Config.APP_NAME, layout="wide")
     st.title(f"🚀 {Config.APP_NAME}")
-    
-    # Session State for Persistence
-    if 'system_ready' not in st.session_state:
-        st.session_state.system_ready = False
+    st.caption(f"Version {Config.VERSION} | High-Performance XGBoost Engine")
 
+    # Initialize System (Cached)
     @st.cache_resource
     def get_system():
         logger = Logger("gui")
-        path = "AI_ALD1.csv"
-        if not os.path.exists(path): path = os.path.join(os.path.dirname(__file__), "AI_ALD1.csv")
+        path = Config.DATA_FILE
+        # Robust path finding
+        if not os.path.exists(path): 
+            path = os.path.join(os.path.dirname(__file__), Config.DATA_FILE)
         
-        dm = ALDDataManager(path, "gui")
+        dm = ALDDataManager(path, logger)
         mm = ALDXGBoostModel(dm, logger)
-        opt = ALDOptimizer(dm, mm, "gui")
-        return opt, mm
+        return ALDOptimizer(dm, mm, "gui"), mm
 
     try: 
         opt, mm = get_system()
-        st.session_state.system_ready = True
-    except Exception as e: st.error(f"System Init Failed: {e}"); st.stop()
+    except Exception as e: 
+        st.error(f"System Initialization Failed: {e}")
+        st.stop()
 
     # Sidebar
     st.sidebar.header("⚙️ Process Targets")
-    p = st.sidebar.selectbox("Precursor", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
+    p = st.sidebar.selectbox("Precursor", list(Config.PRECURSOR_CONSTANTS.keys()))
     th = st.sidebar.number_input("Thickness (nm)", 1.0, 1000.0, 15.0)
     ar = st.sidebar.number_input("Aspect Ratio (AR)", 1.0, 200.0, 10.0)
     cd = st.sidebar.number_input("Critical Dimension (nm)", 5.0, 5000.0, 100.0)
     
-    # Force Retrain Option
-    if st.sidebar.button("🔄 Force Retrain Model"):
-        if os.path.exists(Config.MODEL_FILE): os.remove(Config.MODEL_FILE)
-        st.cache_resource.clear()
-        st.rerun()
-
     if 'done' not in st.session_state: st.session_state.done = False
 
     if st.sidebar.button("🔥 Run Optimization", type="primary"):
         u_in = {"Precursor": p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        with st.spinner("Searching Optimal Recipe (Inverse Design)..."):
+        with st.spinner("Searching Optimal Recipe..."):
             st.session_state.res = opt.optimize_recipe(u_in)
             st.session_state.u_in = u_in
             st.session_state.done = True
 
-    # Results View
+    # Results Dashboard
     if st.session_state.done:
         rec, pred, val = st.session_state.res
         
@@ -477,10 +486,15 @@ def main_gui():
         
         with tab1:
             c1, c2 = st.columns(2)
-            with c1: st.subheader("✅ Optimized Recipe"); st.dataframe(pd.DataFrame([rec]).T, use_container_width=True)
-            with c2: st.subheader("📈 Predicted Properties"); st.dataframe(pd.DataFrame([pred]).T, use_container_width=True)
-            st.success(f"Physics Validation: Step Coverage = {val['Physics SC (%)']}")
-        
+            with c1: 
+                st.subheader("✅ Optimized Recipe")
+                st.dataframe(pd.DataFrame([rec]).T, use_container_width=True)
+            with c2: 
+                st.subheader("📈 Predicted Properties")
+                st.dataframe(pd.DataFrame([pred]).T, use_container_width=True)
+                st.success(f"Physics Validation (SC): {val['Physics SC (%)']}")
+                st.info(f"Optimization Cost: {val['Cost']}")
+
         with tab2:
             st.subheader("Parameter Sweep Simulation")
             c1, c2, c3 = st.columns(3)
@@ -489,22 +503,23 @@ def main_gui():
             y2 = c3.selectbox("Property Result (Right Y)", ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)"])
             
             if st.button("Run Simulation"):
-                curr = st.session_state.u_in[tgt]
-                rng = np.linspace(curr*0.5, curr*1.5, 10)
-                df = opt.run_simulation(st.session_state.u_in, tgt, rng)
-                
-                fig, ax1 = plt.subplots(figsize=(10, 4))
-                ax1.plot(df[tgt], df[y1], 'r-o', label=f"Recipe: {y1}")
-                ax1.set_ylabel(y1, color='r'); ax1.tick_params(axis='y', labelcolor='r')
-                ax1.grid(True, linestyle='--', alpha=0.5)
-                
-                ax2 = ax1.twinx()
-                ax2.plot(df[tgt], df[y2], 'b-s', label=f"Pred: {y2}")
-                ax2.set_ylabel(y2, color='b'); ax2.tick_params(axis='y', labelcolor='b')
-                
-                lines = ax1.get_lines() + ax2.get_lines()
-                ax1.legend(lines, [l.get_label() for l in lines], loc='upper center')
-                st.pyplot(fig)
+                with st.spinner("Simulating..."):
+                    curr = st.session_state.u_in[tgt]
+                    rng = np.linspace(curr*0.5, curr*1.5, 10)
+                    df = opt.run_simulation(st.session_state.u_in, tgt, rng)
+                    
+                    fig, ax1 = plt.subplots(figsize=(10, 4))
+                    ax1.plot(df[tgt], df[y1], 'r-o', label=f"Recipe: {y1}")
+                    ax1.set_ylabel(y1, color='r'); ax1.tick_params(axis='y', labelcolor='r')
+                    ax1.grid(True, linestyle='--', alpha=0.5)
+                    
+                    ax2 = ax1.twinx()
+                    ax2.plot(df[tgt], df[y2], 'b-s', label=f"Pred: {y2}")
+                    ax2.set_ylabel(y2, color='b'); ax2.tick_params(axis='y', labelcolor='b')
+                    
+                    lines = ax1.get_lines() + ax2.get_lines()
+                    ax1.legend(lines, [l.get_label() for l in lines], loc='upper center')
+                    st.pyplot(fig)
 
         with tab3:
             st.subheader("Feature Importance (XGBoost)")
@@ -513,10 +528,10 @@ def main_gui():
                 fig, ax = plt.subplots(figsize=(8, 4))
                 ax.barh(names, imps, color="#4A90E2")
                 ax.invert_yaxis()
-                ax.set_xlabel("Relative Importance Score")
+                ax.set_xlabel("Importance Score")
                 st.pyplot(fig)
             else:
-                st.warning("Feature importance not available for this model state.")
+                st.warning("Feature importance not available.")
 
 if __name__ == "__main__":
     if "streamlit" in sys.modules: main_gui()
