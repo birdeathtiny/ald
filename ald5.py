@@ -1,491 +1,447 @@
-# --- 0. 기본 라이브러리 및 Streamlit 임포트 ---
+# ==============================================================================
+#  [Enterprise-Grade] AI ALD Process Optimizer (XGBoost + Feature Engineering)
+# ==============================================================================
+#  1. Data Management: Loading, Preprocessing, Polynomial Feature Generation
+#  2. Model Management: XGBoost w/ RandomizedSearchCV, Feature Importance Analysis
+#  3. Physics Engine: Step Coverage & Knudsen Diffusion Calculations
+#  4. Optimization Engine: Constrained SLSQP Optimization
+#  5. UI/UX: CLI (Terminal) & GUI (Streamlit) Support
+# ==============================================================================
+
 import streamlit as st
 import numpy as np
 import pandas as pd
 import sys
 import os
+import time
+import matplotlib
+if "streamlit" not in sys.modules:
+    try: matplotlib.use('TkAgg')
+    except: pass
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.multioutput import MultiOutputRegressor
+from sklearn.pipeline import Pipeline
 import xgboost as xgb
 from scipy.optimize import minimize
 from typing import Dict, Any, List, Tuple
 
-# --- 0. 물리/화학 상수 테이블 정의 ---
+# --- 0. Constants & Configuration ---
+PRECURSOR_CONSTANTS = {
+    "TMA": {"mass_g_mol": 72.12, "diameter_m": 5.0e-10, "sticking_c": 0.005},
+    "TDMAH": {"mass_g_mol": 204.37, "diameter_m": 8.5e-10, "sticking_c": 0.001},
+    "TEMAHf": {"mass_g_mol": 406.88, "diameter_m": 12.0e-10, "sticking_c": 0.005},
+    "Zr(NEt2)4": {"mass_g_mol": 379.79, "diameter_m": 11.0e-10, "sticking_c": 0.008}
+}
 N_A = 6.022e23
 k_B = 1.38e-23
 
-PRECURSOR_CONSTANTS = {
-    "TMA": {"mass_g_mol": 72.12, "diameter_m": 5.0e-10, "sticking_c": 0.005, "max_sites_q": 1.0e18},
-    "TDMAH": {"mass_g_mol": 204.37, "diameter_m": 8.5e-10, "sticking_c": 0.001, "max_sites_q": 0.8e18},
-    "TEMAHf": {"mass_g_mol": 406.88, "diameter_m": 12.0e-10, "sticking_c": 0.005, "max_sites_q": 0.5e18},
-    "Zr(NEt2)4": {"mass_g_mol": 379.79, "diameter_m": 11.0e-10, "sticking_c": 0.008, "max_sites_q": 0.6e18}
-}
-
-COST_WEIGHTS = {
-    "gpc": 10000.0,
-    "roughness": 10.0
-}
-
-# --- 1. ALD 최적화 메인 클래스 ---
-class ALDOptimizer:
-    
-    def __init__(self, file_path: str, mode: str = "cli"):
+# ==========================================
+# 1. Data Manager Class
+# ==========================================
+class ALDDataManager:
+    def __init__(self, file_path: str, mode: str):
         self.mode = mode
-        if self.mode == "cli":
-            print(f"--- [Smart Tuning Mode] 데이터 로드 및 스마트 학습 시작 ---")
-        
-        self.DEFAULT_GPC_GUESS_A = 1.0 
+        self.file_path = file_path
         self.X_scaler = StandardScaler()
         self.Y_scaler = StandardScaler()
-        self.model = None
-        self.ALL_INPUT_FEATURES_ORDERED = []
-        self.ALL_OUTPUT_FEATURES_ORDERED = []
-        self.performance_metrics = {}
-        self.best_params = {} 
+        # 💡 [Feature Engineering] 변수 간의 상호작용(곱하기 등)을 추가하여 AI의 통찰력 강화
+        self.poly = PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)
         
-        # 1. 데이터 로드
-        df_encoded = self._load_and_preprocess(file_path)
-        
-        # 2. 데이터셋 준비
-        self._prepare_datasets(df_encoded)
-        
-        # 3. 모델 학습 (스마트 튜닝: 대표 타겟으로 파라미터 찾기)
-        self._train_model_smart()
+        self._load_data()
+        self._process_data()
 
-    def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
-        try:
-            df = pd.read_csv(file_path, encoding='CP949')
-        except Exception as e:
-            try:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                full_path = os.path.join(current_dir, file_path)
-                df = pd.read_csv(full_path, encoding='CP949')
-            except:
-                msg = f"[오류] 파일을 찾을 수 없습니다: {file_path}"
+    def _load_data(self):
+        if not os.path.exists(self.file_path):
+             # Try finding in current directory
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            alt_path = os.path.join(current_dir, os.path.basename(self.file_path))
+            if os.path.exists(alt_path):
+                self.file_path = alt_path
+            else:
+                msg = f"❌ [Error] Data file not found: {self.file_path}"
                 if self.mode == "cli": print(msg); sys.exit(1)
                 else: st.error(msg); st.stop()
+                
+        try: self.df = pd.read_csv(self.file_path, encoding='CP949')
+        except: self.df = pd.read_csv(self.file_path)
+        
+        if self.mode == "cli": print(f"✅ Data loaded successfully: {len(self.df)} rows")
 
-        df.replace('-', np.nan, inplace=True)
-        cols_to_convert = [
+    def _process_data(self):
+        # 1. Clean Data
+        self.df.replace('-', np.nan, inplace=True)
+        
+        cols_num = [
             'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
-            'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)',
-            'Co-reactant Flow Rate (cm3/min)', 'Thickness (nm)', 'Surface Roughness (RMS, nm)',
-            'Uniformity (%)', 'Step Coverage (sc, %)', 'Density (g/cm3)', 'GPC (A/cycle)',
-            'Aspect Ratio (AR)', 'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)',
-            'Breakdown Field (MV/cm)'
+            'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)', 'Thickness (nm)', 
+            'Surface Roughness (RMS, nm)', 'Uniformity (%)', 'Step Coverage (sc, %)', 
+            'Density (g/cm3)', 'GPC (A/cycle)', 'Aspect Ratio (AR)', 
+            'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)', 'Breakdown Field (MV/cm)'
         ]
-        for col in cols_to_convert:
-            if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
+        for c in cols_num:
+            if c in self.df.columns: self.df[c] = pd.to_numeric(self.df[c], errors='coerce')
 
-        if 'Co-reactant' in df.columns:
-            df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O', 'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
+        # 2. Encode Categoricals
+        if 'Co-reactant' in self.df.columns:
+            self.df['Co-reactant'] = self.df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
+            
+        drop_cols = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', '순서']
+        self.df.drop(columns=[c for c in drop_cols if c in self.df.columns], inplace=True)
         
-        cols_to_drop = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', '순서']
-        df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
-        
-        categorical_cols = [c for c in ['Precursor', 'Co-reactant', 'Purge Gas'] if c in df.columns]
-        return pd.get_dummies(df, columns=categorical_cols, dummy_na=False)
+        cat_cols = [c for c in ['Precursor', 'Co-reactant', 'Purge Gas'] if c in self.df.columns]
+        self.df_encoded = pd.get_dummies(self.df, columns=cat_cols, dummy_na=False)
 
-    def _prepare_datasets(self, df_encoded: pd.DataFrame):
-        target_cols = [
+        # 3. Split X/Y
+        self.target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)', 'Leakage Current Density (A/cm2)', 
             'Dielectric Constant (ε)', 'Breakdown Field (MV/cm)', 'Step Coverage (sc, %)'
         ]
-        cols_to_ignore = ['Aspect Ratio (AR)']
+        ignore_cols = ['Aspect Ratio (AR)']
         
-        avail_targets = [c for c in target_cols if c in df_encoded.columns]
-        avail_drops = [c for c in cols_to_ignore if c in df_encoded.columns]
-        
-        self.ALL_OUTPUT_FEATURES_ORDERED = avail_targets
-        self.ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(columns=avail_targets + avail_drops).columns.tolist()
+        self.targets = [c for c in self.target_cols if c in self.df_encoded.columns]
+        self.inputs = self.df_encoded.drop(columns=self.targets + [c for c in ignore_cols if c in self.df_encoded.columns]).columns.tolist()
 
-        X = df_encoded[self.ALL_INPUT_FEATURES_ORDERED].values
-        Y = df_encoded[self.ALL_OUTPUT_FEATURES_ORDERED].values
+        X_raw = self.df_encoded[self.inputs].values
+        Y_raw = self.df_encoded[self.targets].values
         
-        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+        # 4. Impute & Feature Engineering
+        imputer_x = KNNImputer(n_neighbors=5)
+        X_imputed = imputer_x.fit_transform(X_raw)
         
-        imputer_X = KNNImputer(n_neighbors=5)
-        self.X_train = imputer_X.fit_transform(X_train)
-        self.X_test = imputer_X.transform(X_test)
+        # 💡 다항 특성 생성 (Poly Features) -> 데이터 컬럼 수 증가
+        X_poly = self.poly.fit_transform(X_imputed) 
         
-        imputer_Y = KNNImputer(n_neighbors=5)
-        self.Y_train = imputer_Y.fit_transform(Y_train)
-        self.Y_test = imputer_Y.transform(Y_test)
-        
-        self.X_train_scaled = self.X_scaler.fit_transform(self.X_train)
-        self.X_test_scaled = self.X_scaler.transform(self.X_test)
-        self.Y_train_scaled = self.Y_scaler.fit_transform(self.Y_train)
-        self.Y_test_scaled = self.Y_scaler.transform(self.Y_test)
+        imputer_y = KNNImputer(n_neighbors=5)
+        Y_imputed = imputer_y.fit_transform(Y_raw)
 
-        if self.mode == "cli":
-            print(f"✅ 데이터 로드 완료 (입력: {X.shape[1]}개, 출력: {Y.shape[1]}개)")
-
-    def _train_model_smart(self):
-        """
-        [Smart Tuning]
-        전체 타겟을 다 튜닝하면 느립니다. 
-        대표 타겟(Thickness) 하나로 최적 파라미터를 찾고(약 3초), 전체 모델에 적용합니다.
-        """
-        if self.mode == "cli": print("--- 🧠 AI가 최적의 파라미터를 탐색 중입니다 (약 3~5초 소요)... ---")
+        # 5. Scale & Split
+        X_scaled = self.X_scaler.fit_transform(X_poly)
+        Y_scaled = self.Y_scaler.fit_transform(Y_imputed)
         
+        self.X_train, self.X_test, self.Y_train, self.Y_test = train_test_split(
+            X_scaled, Y_scaled, test_size=0.2, random_state=42
+        )
+        self.Y_test_raw = self.Y_scaler.inverse_transform(self.Y_test)
+        
+        # feature names update (poly features 포함)
+        self.feature_names = self.poly.get_feature_names_out(self.inputs)
+        
+        if self.mode == "cli": 
+            print(f"✅ Feature Engineering Completed. Input Features: {X_raw.shape[1]} -> {X_poly.shape[1]} (Expanded)")
+
+
+# ==========================================
+# 2. Model Manager Class
+# ==========================================
+class ALDXGBoostModel:
+    def __init__(self, data_manager: ALDDataManager, mode: str):
+        self.dm = data_manager
+        self.mode = mode
+        self.model = None
+        self.best_params = {}
+        self.metrics = {}
+        self._train()
+
+    def _train(self):
+        if self.mode == "cli": 
+            print("--- 🧠 AI Auto-Tuning & Training Started (Wait for optimization...) ---")
+        
+        # 1. Define Search Space
         param_dist = {
-            'n_estimators': [200, 400, 600],
-            'learning_rate': [0.03, 0.05, 0.1],
-            'max_depth': [4, 5, 6],
-            'subsample': [0.7, 0.8],
-            'colsample_bytree': [0.7, 0.8]
+            'n_estimators': [300, 500, 800],
+            'learning_rate': [0.01, 0.05, 0.1],
+            'max_depth': [4, 6, 8],
+            'subsample': [0.7, 0.9],
+            'colsample_bytree': [0.7, 0.9],
+            'min_child_weight': [1, 3]
         }
         
-        # 1. 대표 타겟(0번: Thickness)으로만 튜닝 -> 속도 9배 향상
+        # 2. Randomized Search (Single Target Optimization for Speed)
+        # 대표적으로 Thickness(0번)를 기준으로 최적 파라미터를 찾음
         search = RandomizedSearchCV(
             estimator=xgb.XGBRegressor(n_jobs=-1, random_state=42),
             param_distributions=param_dist,
-            n_iter=10,   # 10번 실험 (충분함)
-            cv=2,        # 2-Fold 검증
+            n_iter=10, # 10 experiments
+            cv=3,      # 3-fold CV
             scoring='neg_mean_squared_error',
             verbose=0,
-            random_state=42,
             n_jobs=-1
         )
         
-        search.fit(self.X_train_scaled, self.Y_train_scaled[:, 0]) 
+        search.fit(self.dm.X_train, self.dm.Y_train[:, 0])
         self.best_params = search.best_params_
         
-        if self.mode == "cli":
-            print(f"✨ 최적 파라미터 발견: {self.best_params}")
-            print("--- 🤖 전체 모델 학습 적용 중... ---")
+        if self.mode == "cli": print(f"✨ Optimized Params Found: {self.best_params}")
         
-        # 2. 찾은 파라미터로 전체 타겟 학습
+        # 3. Final Training (Multi-Output)
         self.model = MultiOutputRegressor(xgb.XGBRegressor(**self.best_params, n_jobs=-1, random_state=42))
-        self.model.fit(self.X_train_scaled, self.Y_train_scaled)
+        self.model.fit(self.dm.X_train, self.dm.Y_train)
         
-        # 3. 평가
-        Y_pred_scaled = self.model.predict(self.X_test_scaled)
-        Y_pred = self.Y_scaler.inverse_transform(Y_pred_scaled)
+        # 4. Evaluation
+        Y_pred_scaled = self.model.predict(self.dm.X_test)
+        Y_pred = self.dm.Y_scaler.inverse_transform(Y_pred_scaled)
         
-        r2 = r2_score(self.Y_test, Y_pred)
-        rmse = np.sqrt(mean_squared_error(self.Y_test, Y_pred))
+        r2 = r2_score(self.dm.Y_test_raw, Y_pred)
+        rmse = np.sqrt(mean_squared_error(self.dm.Y_test_raw, Y_pred))
+        self.metrics = {'R2': r2, 'RMSE': rmse}
         
-        RMSE_scores = np.sqrt(mean_squared_error(self.Y_test, Y_pred, multioutput='raw_values'))
-        R2_scores = r2_score(self.Y_test, Y_pred, multioutput='raw_values')
-        
-        R2_dict = dict(zip(self.ALL_OUTPUT_FEATURES_ORDERED, R2_scores.round(4)))
-        RMSE_dict = dict(zip(self.ALL_OUTPUT_FEATURES_ORDERED, RMSE_scores.round(4)))
-        
-        self.performance_metrics = {'R2': r2, 'RMSE': rmse}
-        self.performance_df = pd.DataFrame({'RMSE': RMSE_dict, 'R^2': R2_dict})
-        
-        if self.mode == "cli":
-            print(f"✅ 학습 완료 | 평균 R2 Score: {r2:.4f}")
+        if self.mode == "cli": print(f"✅ Model Training Finished | R2 Score: {r2:.4f}")
 
-    # --- 물리 모델 (SC) ---
-    @staticmethod
-    def _calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
-        const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
-        d_precursor_m = const["diameter_m"]; T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
-        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
-        Kn = lambda_m / L_feature_m
-        return lambda_m, Kn
+    def predict(self, input_vector):
+        # Feature Engineering 적용 (Poly)
+        input_poly = self.dm.poly.transform(input_vector)
+        # Scaling
+        input_scaled = self.dm.X_scaler.transform(input_poly)
+        # Prediction
+        pred_scaled = self.model.predict(input_scaled)
+        # Inverse Scaling
+        return self.dm.Y_scaler.inverse_transform(pred_scaled)[0]
 
-    @staticmethod
-    def _calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
-        import numpy as np
-        const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
-        d = const["diameter_m"]; M_kg = const["mass_g_mol"] / 1000.0 / N_A
-        T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
-        L_m = AR_value * CD_m
-        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg))
-        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
-        D_eff = 1.0 / ((1.0 / ((1/3)*lambda_m*v_avg + 1e-30)) + (1.0 / ((1/3)*v_avg*CD_m + 1e-30)))
-        lambda_pen = np.sqrt(D_eff * Pulse_Time_s + 1e-30)
-        phi = L_m / (lambda_pen + 1e-30)
-        if phi < 1.0: SC_fraction = 1.0 / (1.0 + phi); mode = "Reaction Limited (RDS, φ < 1)"
-        else: SC_fraction = np.exp(-phi); mode = "Diffusion Limited (RDS, φ ≥ 1)"
-        return float(np.clip(SC_fraction * 100.0, 0.0, 100.0)), float(phi), mode
-
-    def _calculate_physics_sc(self, P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
-        sc, _, _ = self._calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m)
-        return sc
-
-    def _create_model_input(self, recipe_params, precursor_name, co_reactant_name, purge_gas_name) -> pd.DataFrame:
-        input_df = pd.DataFrame(columns=self.ALL_INPUT_FEATURES_ORDERED); input_df.loc[0] = 0.0
-        for key, value in recipe_params.items():
-            if key in input_df.columns: input_df.at[0, key] = value
-        if f"Precursor_{precursor_name}" in input_df.columns: input_df.at[0, f"Precursor_{precursor_name}"] = 1.0
-        if f"Co-reactant_{co_reactant_name}" in input_df.columns: input_df.at[0, f"Co-reactant_{co_reactant_name}"] = 1.0
-        if f"Purge Gas_{purge_gas_name}" in input_df.columns: input_df.at[0, f"Purge Gas_{purge_gas_name}"] = 1.0
-        return input_df
-
-    def _predict_from_recipe(self, recipe_params, precursor_name, co_reactant_name, purge_gas_name) -> pd.Series:
-        input_df = self._create_model_input(recipe_params, precursor_name, co_reactant_name, purge_gas_name)
-        X_scaled = self.X_scaler.transform(input_df.values); X_tensor = torch.from_numpy(X_scaled).float()
-        self.final_model.eval()
-        with torch.no_grad(): Y_pred_scaled_tensor = self.final_model(X_tensor)
-        Y_pred_unscaled = self.Y_scaler.inverse_transform(Y_pred_scaled_tensor.numpy())[0]
-        return pd.Series(Y_pred_unscaled, index=self.ALL_OUTPUT_FEATURES_ORDERED).round(4)
-
-    def _constraint_sc(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
-        target_ar = user_input["Target AR"]
-        TARGET_SC_MIN = 98.0 if target_ar <= 5 else 90.0 if target_ar <= 15 else 85.0
-        phys_sc = self._calculate_physics_sc(x[1], x[0], x[2], user_input["Target AR"], user_input["Precursor"], user_input["CD (nm)"] * 1e-9)
-        return phys_sc - TARGET_SC_MIN
-
-    def _objective_function(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
-        recipe_params = {
-            "Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
-            "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
-            "Cycles (n)": fixed_cycles_n, "Co-reactant_Pulse Time (s)": x[2]
-        }
-        try:
-            pred = self._predict_from_recipe(recipe_params, user_input["Precursor"], co_reactant_name, purge_gas_name)
-        except: return 1e9
-        target_gpc = (user_input["Thickness (nm)"] * 10) / (fixed_cycles_n + 1e-6)
-        cost = (cost_weights["gpc"] * (pred.get('GPC (A/cycle)', 0) - target_gpc)**2) + (cost_weights["roughness"] * (pred.get('Surface Roughness (RMS, nm)', 10)/5.0)**2)
-        return cost
-
-    def generate_optimal_recipe(self, user_input: Dict[str, Any], silent: bool = False):
-        precursor = user_input["Precursor"]; thickness = user_input["Thickness (nm)"]
-        co_reactant = 'H2O' if precursor in ['TMA', 'TDMAH'] else 'O3'; purge_gas = "N2"
-        initial_cycles = max(10, int(round((thickness * 10) / self.DEFAULT_GPC_GUESS_A)))
-        
-        bounds = [(150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500)]
-        initial_guess = [np.random.uniform(l, h) for l, h in bounds]
-
-        if self.mode == "cli" and not silent:
-            print(f"\n--- 🔍 최적화 탐색 시작 ---")
-
-        args = (user_input, co_reactant, purge_gas, COST_WEIGHTS, initial_cycles)
-        result = minimize(self._objective_function, initial_guess, args=args, method='SLSQP', bounds=bounds,
-                          constraints={'type': 'ineq', 'fun': self._constraint_sc, 'args': args}, options={'maxiter': 30, 'eps': 1e-6})
-        
-        x = result.x
-        check_params = {"Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
-                        "Co-reactant_Pulse Time (s)": x[2], "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
-                        "Cycles (n)": initial_cycles}
-        check_pred = self.predict(check_params, user_input["Precursor"], co_reactant, "N2")
-        final_gpc = max(0.001, check_pred.get("GPC (A/cycle)", 1.0))
-        final_cycles = int(round((user_input["Thickness (nm)"] * 10) / final_gpc))
-        
-        final_params = check_params.copy()
-        final_params["Cycles (n)"] = final_cycles
-        final_pred = self.predict(final_params, user_input["Precursor"], co_reactant, "N2")
-        final_pred["Thickness (nm)"] = (final_gpc * final_cycles) / 10.0 
-
-        recipe = {
-            "Precursor": user_input["Precursor"], "Co-reactant": co_reactant,
-            "Temperature (c)": round(x[0], 1), "Pressure (torr)": round(x[1], 3),
-            "Cycles (n)": final_cycles, "Pulse Time (s)": round(x[2], 2),
-            "Purge Time (s)": round(x[3], 1), "Purge Flow (sccm)": int(x[4])
-        }
-        
-        phys_sc = self._calculate_physics_sc(x[1], x[0], x[2], user_input["Target AR"], user_input["Precursor"], user_input["CD (nm)"]*1e-9)
-        sc_val, phi, mode = self._calculate_physics_sc_details(x[1], x[0], x[2], user_input["Target AR"], user_input["Precursor"], user_input["CD (nm)"]*1e-9)
-        lambda_m, Kn = self._calculate_physical_parameters(x[0], x[1], user_input["Precursor"], user_input["CD (nm)"]*1e-9)
-        valid = {"Mean Free Path (λ) [m]": f"{lambda_m:.2e}", "Knudsen Number (Kn)": f"{Kn:.2f}", 
-                 "Thiele Modulus (φ)": f"{phi:.4f}", "Transport Mode": mode, "Physics SC (%)": f"{sc_val:.2f}%", "Cost": f"{res.fun:.4f}"}
-        
-        if self.mode == "cli" and not silent:
-            print("✅ 최적화 완료!")
-
-        return recipe, final_pred, valid
-
-    def simulate_target_sweep(self, base_user_input, target_param_name, range_values):
-        results = []
-        for val in range_values:
-            current_input = base_user_input.copy()
-            current_input[target_param_name] = val
-            rec, pred, val_data = self.generate_optimal_recipe(current_input, silent=True)
-            
-            phys_sc = self._calculate_physics_sc(
-                rec['Pressure (torr)'], rec['Temperature (c)'], rec['Pulse Time (s)'],
-                current_input['Target AR'], current_input['Precursor'], current_input['CD (nm)'] * 1e-9
-            )
-            row = {target_param_name: val}
-            row.update({k: v for k, v in rec.items() if isinstance(v, (int, float))})
-            row.update(pred.to_dict())
-            row["Physics SC (%)"] = phys_sc
-            results.append(row)
-        return pd.DataFrame(results)
+    def get_feature_importance(self):
+        # MultiOutput이므로 첫 번째 Estimator(예: GPC)의 중요도를 가져옴
+        importances = self.model.estimators_[4].feature_importances_ # 4번: GPC
+        indices = np.argsort(importances)[::-1]
+        top_n = 10
+        return [self.dm.feature_names[i] for i in indices[:top_n]], importances[indices[:top_n]]
 
 
 # ==========================================
-# 🖥️ CLI 모드 실행 함수
+# 3. Physics Engine Class
+# ==========================================
+class ALDPhysics:
+    @staticmethod
+    def calc_sc(P, T, Pulse, AR, Precursor, CD_nm):
+        try:
+            const = PRECURSOR_CONSTANTS.get(Precursor, PRECURSOR_CONSTANTS["TMA"])
+            T_K = T + 273.15; P_Pa = P * 133.322; L = AR * (CD_nm * 1e-9)
+            d = const["diameter_m"]; m_kg = const["mass_g_mol"] / 1000 / N_A
+            
+            v_avg = np.sqrt(8 * k_B * T_K / (np.pi * m_kg))
+            lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
+            
+            # Knudsen Diffusion
+            D_Kn = (1/3) * v_avg * (CD_nm * 1e-9)
+            D_bulk = (1/3) * lambda_m * v_avg
+            D_eff = 1 / (1/D_Kn + 1/D_bulk)
+            
+            lambda_pen = np.sqrt(D_eff * Pulse + 1e-12)
+            phi = L / (lambda_pen + 1e-12)
+            
+            if phi < 1.0: return 100.0 / (1.0 + phi)
+            else: return np.exp(-phi) * 100.0
+        except: return 0.0
+
+
+# ==========================================
+# 4. Optimizer Engine Class
+# ==========================================
+class ALDOptimizer:
+    def __init__(self, data_manager, model_manager, mode="cli"):
+        self.dm = data_manager
+        self.mm = model_manager
+        self.mode = mode
+
+    def _construct_input(self, params, precursor, co_reactant, purge):
+        # DataFrame 생성 -> OneHot -> Poly -> Scale
+        row = pd.DataFrame(0.0, index=[0], columns=self.dm.inputs)
+        for k, v in params.items():
+            if k in row.columns: row.at[0, k] = v
+        
+        for col in [f"Precursor_{precursor}", f"Co-reactant_{co_reactant}", f"Purge Gas_{purge}"]:
+            if col in row.columns: row.at[0, col] = 1.0
+        
+        return row.values
+
+    def optimize(self, user_in):
+        init_cycles = max(10, int(user_in["Thickness (nm)"] * 10))
+        
+        def objective(x):
+            params = {
+                "Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
+                "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
+                "Cycles (n)": init_cycles, "Co-reactant_Pulse Time (s)": x[2]
+            }
+            try:
+                vec = self._construct_input(params, user_in["Precursor"], 'H2O', 'N2')
+                pred = self.mm.predict(vec)
+                # Index 4: GPC, Index 1: Roughness (Based on target list order)
+                gpc_pred = pred[4]; rough_pred = pred[1]
+                target_gpc = (user_in["Thickness (nm)"] * 10) / init_cycles
+                return 10000 * (gpc_pred - target_gpc)**2 + 10 * (rough_pred**2)
+            except: return 1e9
+
+        bounds = [(150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500)]
+        x0 = [250, 0.5, 0.1, 5.0, 200] # Smart Initial Guess
+        
+        # SLSQP Optimization
+        res = minimize(objective, x0, method='SLSQP', bounds=bounds, options={'maxiter': 30, 'eps': 1e-6})
+        
+        # Final Calculation
+        x = res.x
+        final_params = {
+            "Temperature (c)": round(x[0], 1), "Pressure (torr)": round(x[1], 3),
+            "Precursor Pulse Time (s)": round(x[2], 2), "Purge Time (s)": round(x[3], 1),
+            "Purge Gas Flow Rate (cm3/min)": int(x[4]), "Cycles (n)": init_cycles
+        }
+        
+        vec = self._construct_input(final_params, user_in["Precursor"], 'H2O', 'N2')
+        final_pred_vals = self.mm.predict(vec)
+        final_pred_dict = dict(zip(self.dm.targets, final_pred_vals))
+        
+        # GPC Correction
+        gpc = max(0.001, final_pred_dict['GPC (A/cycle)'])
+        real_cycles = int(round((user_in["Thickness (nm)"] * 10) / gpc))
+        final_params['Cycles (n)'] = real_cycles
+        final_pred_dict['Thickness (nm)'] = (gpc * real_cycles) / 10.0
+        
+        # Physics Check
+        phys_sc = ALDPhysics.calc_sc(x[1], x[0], x[2], user_in["Target AR"], user_in["Precursor"], user_in["CD (nm)"])
+        
+        return final_params, final_pred_dict, {"Physics SC (%)": f"{phys_sc:.2f}%", "Cost": f"{res.fun:.4f}"}
+
+    def simulate(self, user_in, target, sweep_vals):
+        rows = []
+        for val in sweep_vals:
+            temp_in = user_in.copy(); temp_in[target] = val
+            rec, pred, val_data = self.optimize(temp_in)
+            
+            row = {target: val}
+            row.update({k:v for k,v in rec.items() if isinstance(v, (int, float))})
+            row.update(pred)
+            row["Physics SC (%)"] = float(val_data["Physics SC (%)"].replace('%', ''))
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+
+# ==========================================
+# 5. Main Execution Logic
 # ==========================================
 def main_cli():
-    print("\n" + "="*50 + "\n  [CLI] ALD AI Optimizer (Smart Tuning)\n" + "="*50)
+    print("\n" + "="*60 + "\n  [CLI] Enterprise AI ALD Optimizer (XGBoost + Feature Eng.)\n" + "="*60)
     
-    import matplotlib
-    try: matplotlib.use('TkAgg')
-    except: pass 
-
-    csv_file = "AI_ALD1.csv" 
-    if not os.path.exists(csv_file):
-        print(f"[오류] '{csv_file}' 파일이 없습니다."); return
+    csv_file = "AI_ALD1.csv"
+    if not os.path.exists(csv_file): print(f"❌ Error: {csv_file} not found."); return
     
-    optimizer = ALDOptimizer(file_path=csv_file, mode="cli")
-    print(f"📊 모델 정확도 (R2): {optimizer.performance_metrics['R2']:.4f}")
+    dm = ALDDataManager(csv_file, "cli")
+    mm = ALDXGBoostModel(dm, "cli")
+    opt = ALDOptimizer(dm, mm, "cli")
+    
+    print(f"\n📊 Model Performance (R2): {mm.metrics['R2']:.4f}")
 
     try:
         p_list = ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"]
-        print("\n[전구체 목록]: " + ", ".join([f"{i+1}.{p}" for i, p in enumerate(p_list)]))
-        p_idx = int(input("=> 번호 입력: ")) - 1
+        print("\n[Select Precursor]: " + ", ".join([f"{i+1}.{p}" for i, p in enumerate(p_list)]))
+        p_idx = int(input("=> Input Number: ")) - 1
         sel_p = p_list[p_idx]
-        th = float(input("=> 목표 두께 (nm): "))
-        ar = float(input("=> 목표 AR: "))
+        th = float(input("=> Target Thickness (nm): "))
+        ar = float(input("=> Target AR: "))
         cd = float(input("=> CD (nm): "))
-    except: print("[입력 오류]"); return
+    except: print("Input Error"); return
 
-    user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-    recipe, pred, valid = optimizer.generate_optimal_recipe(user_input)
+    u_in = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
+    rec, pred, valid = opt.optimize(u_in)
     
-    print("\n" + "-"*30)
-    print(f"💡 최적 레시피:\n{pd.Series(recipe).to_string()}")
-    print("\n📈 예측 물성:\n{pred.to_string()}")
-    print("-" * 30)
-
-    # 시각화
-    print("\n📊 [시각화] 목표값 변화에 따른 경향 분석")
-    x_opts = ["Thickness (nm)", "Target AR"]
-    print(f"1. {x_opts[0]}  2. {x_opts[1]}")
-    try: x_idx = int(input("=> X축 선택 (1/2): ")) - 1
-    except: x_idx = 0
-    target_param = x_opts[x_idx]
-
-    print(f"📈 '{target_param}' 변화 시뮬레이션 중...")
-    curr = user_input[target_param]
-    sweep_range = np.linspace(curr * 0.5, curr * 1.5, 10)
-    df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
-
-    plt.figure(figsize=(14, 5))
-    ax1 = plt.subplot(1, 2, 1)
-    l1 = ax1.plot(df[target_param], df["Temperature (c)"], 'r-o', label="Temp (c)")
-    ax1.set_xlabel(target_param); ax1.set_ylabel("Temp (c)", color='r')
-    ax2 = ax1.twinx()
-    l2 = ax2.plot(df[target_param], df["GPC (A/cycle)"], 'b--s', label="GPC")
-    ax2.set_ylabel("GPC (A/cycle)", color='b')
-    lns = l1 + l2; labs = [l.get_label() for l in lns]
-    ax1.legend(lns, labs, loc=0)
-    plt.title("Temp & GPC Trend")
-
+    print("\n[💡 Optimized Recipe]\n", pd.Series(rec).to_string())
+    print("\n[📈 Prediction]\n", pd.Series(pred).to_string())
+    
+    # Visualization
+    print("\n📊 Generating Charts...")
+    sweep_x = np.linspace(th*0.5, th*1.5, 10)
+    df = opt.simulate(u_in, "Thickness (nm)", sweep_x)
+    
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+    
+    plt.subplot(1, 2, 1)
+    l1 = plt.plot(df["Thickness (nm)"], df["Temperature (c)"], 'r-o', label="Temp")[0]
+    plt.xlabel("Target Thickness"); plt.ylabel("Temp (c)", color='r')
+    plt.twinx().plot(df["Thickness (nm)"], df["GPC (A/cycle)"], 'b-s', label="GPC")
+    plt.title("Optimization Trend")
+    
     plt.subplot(1, 2, 2)
-    plt.plot(df[target_param], df["Step Coverage (sc, %)"], 'g-^', label="AI SC")
-    plt.plot(df[target_param], df["Physics SC (%)"], 'k--x', label="Physics SC")
-    plt.legend(); plt.title("Step Coverage Trend")
+    plt.plot(df["Thickness (nm)"], df["Step Coverage (sc, %)"], 'g-^', label="AI SC")
+    plt.plot(df["Thickness (nm)"], df["Physics SC (%)"], 'k--', label="Phys SC")
+    plt.legend(); plt.title("SC Reliability")
     
     plt.tight_layout()
-    try: plt.show(); print("   (그래프 창을 닫으면 종료됩니다)")
-    except Exception as e: print(f"\n⚠️ 그래프 팝업 불가: {e}"); plt.savefig('result_graph.png')
+    try: plt.show()
+    except: print("Plot failed, saved to result.png"); plt.savefig("result.png")
 
 
-# ==========================================
-# 🌐 GUI 모드 (Streamlit)
-# ==========================================
 def main_gui():
-    st.set_page_config(page_title="ALD Optimizer", layout="wide")
-    st.title("🚀 AI 기반 ALD 공정 최적화 시스템")
+    st.set_page_config(page_title="Enterprise ALD Optimizer", layout="wide")
+    st.title("🚀 AI ALD Optimizer (Enterprise Edition)")
 
-    @st.cache_resource(show_spinner="AI 모델 스마트 튜닝 중 (약 3초)...")
-    def load_model():
-        csv_file_name = "AI_ALD1.csv"
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        full_path = os.path.join(current_dir, csv_file_name)
-        if not os.path.exists(full_path): full_path = csv_file_name
-        return ALDOptimizer(full_path, mode="gui")
+    @st.cache_resource
+    def get_system():
+        path = os.path.join(os.path.dirname(__file__), "AI_ALD1.csv")
+        if not os.path.exists(path): path = "AI_ALD1.csv"
+        dm = ALDDataManager(path, "gui")
+        mm = ALDXGBoostModel(dm, "gui")
+        return ALDOptimizer(dm, mm, "gui"), mm
 
-    try: optimizer = load_model()
-    except Exception as e: st.error(f"오류: {e}"); st.stop()
+    try: opt, mm = get_system()
+    except Exception as e: st.error(f"System Error: {e}"); st.stop()
 
-    st.sidebar.header("🎯 목표 설정")
-    sel_p = st.sidebar.selectbox("전구체", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
-    th = st.sidebar.number_input("두께 (nm)", 1.0, 500.0, 15.0)
-    ar = st.sidebar.number_input("AR", 1.0, 100.0, 10.0)
+    st.sidebar.header("Configuration")
+    sel_p = st.sidebar.selectbox("Precursor", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
+    th = st.sidebar.number_input("Target Thickness (nm)", 1.0, 500.0, 15.0)
+    ar = st.sidebar.number_input("Target AR", 1.0, 100.0, 10.0)
     cd = st.sidebar.number_input("CD (nm)", 1.0, 1000.0, 100.0)
+    
+    if 'done' not in st.session_state: st.session_state.done = False
 
-    if 'opt_done' not in st.session_state:
-        st.session_state['opt_done'] = False
-        st.session_state['opt_recipe'] = None
-        st.session_state['pred_results'] = None
-        st.session_state['val_data'] = None
-        st.session_state['opt_stats'] = None
-        st.session_state['user_input'] = None
+    if st.sidebar.button("Optimize Process", type="primary"):
+        u_in = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
+        with st.spinner("Running AI Optimization..."):
+            st.session_state.res = opt.optimize(u_in)
+            st.session_state.u_in = u_in
+            st.session_state.done = True
 
-    if st.sidebar.button("최적화 실행", type="primary"):
-        user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        with st.spinner("최적해 탐색 중..."):
-            rec, pred, val, stats = optimizer.generate_optimal_recipe(user_input=user_input)
-            st.session_state['opt_recipe'] = rec
-            st.session_state['pred_results'] = pred
-            st.session_state['val_data'] = val
-            st.session_state['opt_stats'] = stats
-            st.session_state['user_input'] = user_input
-            st.session_state['opt_done'] = True
-
-    if st.session_state['opt_done']:
-        rec = st.session_state.opt_recipe
-        pred = st.session_state.pred_results
-        val = st.session_state.val_data
-        u_in = st.session_state.user_input
+    if st.session_state.done:
+        rec, pred, val = st.session_state.res
         
-        tab1, tab2 = st.tabs(["결과 리포트", "시뮬레이션 그래프"])
+        tab1, tab2, tab3 = st.tabs(["Report", "Simulation", "Feature Analysis"])
         
         with tab1:
             c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("💡 최적 레시피")
-                st.dataframe(pd.DataFrame([rec]).T.rename(columns={0:"Value"}))
-                st.info(f"물리검증 SC: {val['Physics SC (%)']}")
-            with c2:
-                st.subheader("📈 AI 예측 결과")
-                st.dataframe(pred.to_frame("Predicted"))
-                st.metric("두께 검증", f"{pred['Thickness (nm)']:.2f} nm", delta=f"{pred['Thickness (nm)'] - u_in['Thickness (nm)']:.2f} nm")
-            
-            st.markdown("---")
-            st.caption(f"AI Best Params: {optimizer.best_params}")
-            st.dataframe(optimizer.performance_df.T)
+            with c1: st.subheader("Recipe"); st.dataframe(pd.DataFrame([rec]).T)
+            with c2: st.subheader("Prediction"); st.dataframe(pd.DataFrame([pred]).T); st.info(f"Phys SC: {val['Physics SC (%)']}")
+            st.divider(); st.caption(f"Model R2: {mm.metrics['R2']:.4f} | Best Params: {mm.best_params}")
 
         with tab2:
-            st.header("📊 목표값 변화 시뮬레이션")
-            col1, col2, col3 = st.columns(3)
-            target = col1.selectbox("X축 (목표)", ["Thickness (nm)", "Target AR"])
-            y1 = col2.selectbox("Y1 (좌측)", ["Temperature (c)", "Pressure (torr)", "Pulse Time (s)", "Cycles (n)"])
-            y2 = col3.selectbox("Y2 (우측)", ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)"])
-
-            if st.button("🔄 그래프 업데이트"):
-                with st.spinner("시뮬레이션 중..."):
-                    curr = u_in[target]
-                    rng = np.linspace(curr*0.5, curr*1.5, 10)
-                    df = optimizer.simulate_target_sweep(u_in, target, rng)
-                    st.session_state['sweep_df'] = df
+            st.subheader("Target Sweep Simulation")
+            c1, c2, c3 = st.columns(3)
+            tgt = c1.selectbox("Target (X)", ["Thickness (nm)", "Target AR"])
+            y1 = c2.selectbox("Left Axis (Y1)", ["Temperature (c)", "Pressure (torr)", "Cycles (n)"])
+            y2 = c3.selectbox("Right Axis (Y2)", ["GPC (A/cycle)", "Step Coverage (sc, %)"])
             
-            if 'sweep_df' in st.session_state:
-                df = st.session_state['sweep_df']
-                if target not in df.columns:
-                    st.warning("⚠️ 설정이 변경되었습니다. 업데이트 버튼을 눌러주세요.")
-                else:
-                    fig, ax1 = plt.subplots(figsize=(10, 4))
-                    ax1.plot(df[target], df[y1], 'r-o', label=f"Recipe: {y_left}")
-                    ax1.set_ylabel(y1, color='r'); ax1.tick_params(axis='y', labelcolor='r')
-                    
-                    ax2 = ax1.twinx()
-                    ax2.plot(df[target], df[y2], 'b--s', label=f"Property: {y_right}")
-                    ax2.set_ylabel(y2, color='b'); ax2.tick_params(axis='y', labelcolor='b')
-                    
-                    lines = ax1.get_lines() + ax2.get_lines()
-                    ax1.legend(lines, [l.get_label() for l in lines])
-                    st.pyplot(fig)
-                    
-                    st.subheader("⚖️ SC: AI vs Physics")
-                    fig2, ax = plt.subplots(figsize=(10, 3))
-                    ax.plot(df[target], df["Step Coverage (sc, %)"], 'g-', label="AI")
-                    ax.plot(df[target], df["Physics SC (%)"], 'k--', label="Physics")
-                    ax.set_xlabel(target); ax.set_ylabel("SC (%)")
-                    ax.legend()
-                    st.pyplot(fig2)
+            if st.button("Run Simulation"):
+                curr = st.session_state.u_in[tgt]
+                rng = np.linspace(curr*0.5, curr*1.5, 10)
+                df = opt.simulate(st.session_state.u_in, tgt, rng)
+                
+                fig, ax1 = plt.subplots(figsize=(10, 4))
+                ax1.plot(df[tgt], df[y1], 'r-o', label=y1)
+                ax1.set_ylabel(y1, color='r')
+                ax2 = ax1.twinx()
+                ax2.plot(df[tgt], df[y2], 'b-s', label=y2)
+                ax2.set_ylabel(y2, color='b')
+                st.pyplot(fig)
+        
+        with tab3:
+            st.subheader("🔍 Feature Importance (XGBoost)")
+            st.info("Which process parameters affect the result most?")
+            names, imps = mm.get_feature_importance()
+            fig_f, ax_f = plt.subplots(figsize=(8, 5))
+            ax_f.barh(names, imps, color='skyblue')
+            ax_f.set_xlabel("Importance Score")
+            ax_f.invert_yaxis()
+            st.pyplot(fig_f)
 
 if __name__ == "__main__":
     try:
