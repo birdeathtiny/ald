@@ -17,7 +17,7 @@ from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.ensemble import RandomForestRegressor
 import itertools
 
-# --- 0. 물리/화학 상수 테이블 정의 ---
+# --- 1. 물리/화학 상수 테이블 정의 ---
 N_A = 6.022e23
 k_B = 1.38e-23
 
@@ -268,7 +268,7 @@ class ALDOptimizer:
 
         return test_rmse, RMSE_dict, R2_dict, RRMSE_dict
 
-    # --- 물리 모델 및 최적화 함수 (이전 코드와 동일, 경로 수정만 load_optimizer에 반영됨) ---
+    # --- 물리 모델 및 최적화 함수 ---
     @staticmethod
     def _calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
         const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
@@ -420,18 +420,19 @@ def main_gui():
     def load_optimizer(): 
         csv_file_name = "AI_ALD1.csv"
         
-        # 🟢 파일 경로 수정: 바탕화면의 절대 경로를 사용하여 파일을 찾습니다.
-        try:
-            desktop_path = os.path.join(os.path.expanduser('~'), 'Desktop')
-            full_file_path = os.path.join(desktop_path, csv_file_name)
-        except:
-            # 예상치 못한 환경에서 os.path.expanduser('~')가 실패할 경우를 대비한 대체 경로
+        # [수정됨] 파일 경로를 스크립트 실행 위치(현재 폴더) 기준으로 변경
+        # 이렇게 하면 로컬 컴퓨터와 Streamlit Cloud 서버 양쪽에서 모두 작동합니다.
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        full_file_path = os.path.join(current_dir, csv_file_name)
+
+        # 경로 문제 발생 시 대비책
+        if not os.path.exists(full_file_path):
             full_file_path = csv_file_name 
 
         if not os.path.exists(full_file_path):
-            st.error(f"❌ 데이터 파일 '{csv_file_name}'을(를) **바탕화면**에서 찾을 수 없습니다.")
+            st.error(f"❌ 데이터 파일 '{csv_file_name}'을(를) 찾을 수 없습니다.")
             st.warning(f"현재 탐색 경로: **{full_file_path}**")
-            st.info("파일 이름을 확인하거나, 파일을 이 스크립트와 같은 폴더로 옮겨주세요.")
+            st.info("💡 해결법: 'AI_ALD1.csv' 파일을 이 파이썬 코드와 같은 폴더에 업로드해주세요.")
             st.stop()
             
         return ALDOptimizer(file_path=full_file_path, mode="gui") 
