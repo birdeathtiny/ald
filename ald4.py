@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import seaborn as sns
-import matplotlib.ticker as ticker  # 축 서식 정밀 제어를 위해 추가
+import matplotlib.ticker as ticker
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
@@ -411,22 +411,58 @@ class ALDOptimizer:
         
         x = result.x
         
-        check_params = {"Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
-                        "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4], "Cycles (n)": initial_cycles, "Co-reactant_Pulse Time (s)": x[2]}
+        # [수정] 최적화 결과(x)를 먼저 반올림하여 Recipe 생성
+        rounded_temp = round(x[0], 2)
+        rounded_pressure = round(x[1], 3)
+        rounded_pulse = round(x[2], 3)
+        rounded_purge_time = round(x[3], 2)
+        rounded_purge_flow = round(x[4], 0)
+        
+        # 임시 GPC 확인용 (Cycles 계산을 위함)
+        check_params = {
+            "Temperature (c)": rounded_temp, 
+            "Pressure (torr)": rounded_pressure, 
+            "Precursor_Pulse Time (s)": rounded_pulse,
+            "Purge Time (s)": rounded_purge_time, 
+            "Purge Gas Flow Rate (cm3/min)": rounded_purge_flow, 
+            "Cycles (n)": initial_cycles, 
+            "Co-reactant_Pulse Time (s)": rounded_pulse
+        }
         check_res = self._predict_from_recipe(check_params, precursor, co_reactant, purge_gas)
-        final_gpc = check_res.get('GPC (A/cycle)', 1.0); final_gpc = max(0.001, final_gpc)
+        
+        final_gpc = check_res.get('GPC (A/cycle)', 1.0)
+        final_gpc = max(0.001, final_gpc)
         final_cycles = max(10, int(round((thickness * 10) / final_gpc)))
 
-        final_params = check_params.copy(); final_params["Cycles (n)"] = final_cycles
-        final_pred = self._predict_from_recipe(final_params, precursor, co_reactant, purge_gas)
-        final_pred['Thickness (nm)'] = (final_gpc * final_cycles) / 10.0 
+        # [수정] 최종 Recipe (반올림된 값 포함)
+        opt_recipe = {
+            "Precursor": precursor, 
+            "Co-reactant": co_reactant, 
+            "Temperature (c)": rounded_temp, 
+            "Pressure (torr)": rounded_pressure,
+            "Cycles (n)": final_cycles, 
+            "Precursor Pulse Time (s)": rounded_pulse, 
+            "Co-reactant Pulse Time (s)": rounded_pulse,
+            "Purge Time (s)": rounded_purge_time, 
+            "Purge Gas Flow Rate (cm3/min)": rounded_purge_flow, 
+            "Purge Gas": purge_gas
+        }
 
-        opt_recipe = {"Precursor": precursor, "Co-reactant": co_reactant, "Temperature (c)": round(x[0], 2), "Pressure (torr)": round(x[1], 3),
-                      "Cycles (n)": final_cycles, "Precursor Pulse Time (s)": round(x[2], 3), "Co-reactant Pulse Time (s)": round(x[2], 3),
-                      "Purge Time (s)": round(x[3], 2), "Purge Gas Flow Rate (cm3/min)": round(x[4], 0), "Purge Gas": purge_gas}
+        # [수정] 최종 예측도 반올림된 Recipe를 기반으로 수행 (그래프와 일치시키기 위함)
+        final_pred_params = {
+            "Temperature (c)": rounded_temp, 
+            "Pressure (torr)": rounded_pressure, 
+            "Precursor_Pulse Time (s)": rounded_pulse,
+            "Purge Time (s)": rounded_purge_time, 
+            "Purge Gas Flow Rate (cm3/min)": rounded_purge_flow, 
+            "Cycles (n)": final_cycles, 
+            "Co-reactant_Pulse Time (s)": rounded_pulse
+        }
+        final_pred = self._predict_from_recipe(final_pred_params, precursor, co_reactant, purge_gas)
+        final_pred['Thickness (nm)'] = (final_gpc * final_cycles) / 10.0 
         
-        sc_val, phi, mode = self._calculate_physics_sc_details(x[1], x[0], x[2], user_input["Target AR"], precursor, user_input["CD (nm)"]*1e-9)
-        lambda_m, Kn = self._calculate_physical_parameters(x[0], x[1], precursor, user_input["CD (nm)"]*1e-9)
+        sc_val, phi, mode = self._calculate_physics_sc_details(rounded_pressure, rounded_temp, rounded_pulse, user_input["Target AR"], precursor, user_input["CD (nm)"]*1e-9)
+        lambda_m, Kn = self._calculate_physical_parameters(rounded_temp, rounded_pressure, precursor, user_input["CD (nm)"]*1e-9)
         valid_data = {"Mean Free Path (λ) [m]": f"{lambda_m:.2e}", "Knudsen Number (Kn)": f"{Kn:.2f}", 
                       "Thiele Modulus (φ)": f"{phi:.4f}", "Transport Mode": mode, "SC (Full Model)": f"{sc_val:.4f} %"}
                               
@@ -562,7 +598,7 @@ def main_gui():
             st.header("📊 공정 민감도 분석 (Sensitivity Analysis)")
             st.info("최적화된 레시피를 고정하고, 단일 변수 변화에 따른 물성 변화를 정밀하게 분석합니다.")
             
-            # [수정] 그래프 옵션: 요청하신 Pulse Time vs SC 포함
+            # 그래프 옵션 정의 (X축: 공정 변수, Y축: 물성)
             plot_options = {
                 "GPC vs Temperature (온도)": ("Temperature (c)", "GPC (A/cycle)"),
                 "GPC vs Pulse Time (펄스 시간)": ("Precursor Pulse Time (s)", "GPC (A/cycle)"),
@@ -591,7 +627,7 @@ def main_gui():
                 ax.set_ylabel(y_col_name)
                 ax.grid(True, linestyle='--', alpha=0.5)
                 
-                # [수정] Y축 정밀 서식 및 자동 스케일링 (Zoom-in)
+                # Y축 정밀 서식 및 자동 스케일링 (Zoom-in)
                 ax.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.5f')) # 소수점 5자리 표시
                 
                 # 데이터 범위가 너무 작으면(Noise 수준) 강제로 Zoom-in
