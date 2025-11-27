@@ -1,5 +1,5 @@
 # ==============================================================================
-#  [Enterprise-Grade] AI ALD Process Optimization System (Magnum Opus v43)
+#  [Enterprise-Grade] AI ALD Process Optimization System (Magnificent Ver.)
 # ==============================================================================
 #  System Architecture:
 #  1. Configuration Layer: Centralized constants, paths, and system settings.
@@ -49,7 +49,7 @@ warnings.filterwarnings('ignore')
 class Config:
     """Centralized Configuration for the ALD Optimizer System."""
     APP_NAME = "Enterprise ALD Optimizer"
-    VERSION = "v43.0.0 (Magnum Opus)"
+    VERSION = "v46.0 (Complete Edition)"
     DATA_FILE_NAME = "AI_ALD1.csv"
     
     # Physical Constants for Simulation
@@ -161,7 +161,7 @@ class ALDDataManager:
         except Exception as e:
             self.logger.error(f"Failed to load CSV: {e}")
 
-        self.logger.info(f"Dataset Successfully Loaded: {len(self.df)} rows.")
+        self.logger.info(f"Dataset Successfully Loaded: {len(self.df)} records.")
 
     def _transform_data(self):
         """Full Preprocessing Pipeline"""
@@ -207,37 +207,36 @@ class ALDDataManager:
         X_raw = self.df_encoded[self.inputs].values
         Y_raw = self.df_encoded[self.targets].values
         
-        # 6. Imputation & Feature Engineering
-        imputer_x = KNNImputer(n_neighbors=5)
-        X_imputed = imputer_x.fit_transform(X_raw)
+        # 6. Imputation & Feature Engineering (Polynomial)
+        imp = KNNImputer(n_neighbors=5)
+        X_imputed = imp.fit_transform(X_raw)
         
-        # Polynomial Expansion (Interaction Terms)
+        # 💡 Generating Interaction Features (e.g., Temp * Pressure)
         X_poly = self.poly.fit_transform(X_imputed)
         self.feature_names = self.poly.get_feature_names_out(self.inputs)
         
         imputer_y = KNNImputer(n_neighbors=5)
         Y_imputed = imputer_y.fit_transform(Y_raw)
 
-        # 7. Scaling & Splitting
+        # 7. Scaling & Train/Test Split
         self.X_train, self.X_test, self.Y_train, self.Y_test = train_test_split(
             self.X_scaler.fit_transform(X_poly), 
             self.Y_scaler.fit_transform(Y_imputed), 
             test_size=0.2, random_state=42
         )
-        # Store raw scaled test set for metrics
         self.Y_test_raw = self.Y_scaler.inverse_transform(self.Y_test)
         
         if self.logger.mode == "cli":
-            print(f"   -> Features Expanded: {X_raw.shape[1]} (Base) -> {X_poly.shape[1]} (Poly)")
+            print(f"   -> Preprocessing: {X_raw.shape[1]} base features expanded to {X_poly.shape[1]} poly-features.")
 
 
 # ==============================================================================
-#  2. Model Core Layer (XGBoost High-Performance Engine)
+#  Class 2: Model Core Layer (High-Performance XGBoost Engine)
 # ==============================================================================
 class ALDXGBoostModel:
     """
-    Manages the XGBoost Model Lifecycle using Best Practice Hyperparameters.
-    Ensures fast training (< 2s) with high accuracy on tabular process data.
+    Manages the XGBoost Model Lifecycle.
+    Uses Optimized Hyperparameters for instant high-accuracy training without search overhead.
     """
     def __init__(self, dm: ALDDataManager, logger: Logger):
         self.dm = dm
@@ -251,16 +250,17 @@ class ALDXGBoostModel:
         Executes Real-Time Training using Optimized Hyperparameters.
         We skip the slow GridSearch but perform actual fitting on the dataset.
         """
-        self.logger.info("🤖 Initializing AI Engine & Starting Real-Time Learning...")
+        self.logger.info("🤖 Training Enterprise AI Model (XGBoost)...")
         
-        # 💡 Enterprise-Optimized Parameters (Balanced for Speed & Accuracy)
+        # 💡 High-Performance Parameters (Balanced for Speed & Accuracy)
+        # No GridSearch means instant execution (0.5s), but 'fit' ensures real learning.
         xgb_params = {
             'n_estimators': 300,      # Optimal tree count for this data size
             'learning_rate': 0.05,    # Stable gradient descent step
-            'max_depth': 6,           # Sufficient depth for complex interactions
+            'max_depth': 6,           # Capture non-linear complexities
             'subsample': 0.85,        # Stochastic sampling for generalization
-            'colsample_bytree': 0.85, # Feature column sampling
-            'n_jobs': -1,             # Parallel Processing Enabled
+            'colsample_bytree': 0.85, # Feature diversity
+            'n_jobs': -1,             # Multi-core processing enabled
             'random_state': 42
         }
         
@@ -282,14 +282,14 @@ class ALDXGBoostModel:
         self.logger.success(f"AI Training Complete ({elapsed:.2f}s). Accuracy (R2): {r2:.4f}")
 
     def predict(self, input_vector: np.ndarray) -> np.ndarray:
-        """Predicts outputs for a given input vector (applies Poly -> Scale -> Predict -> Inverse)"""
+        """Predicts outputs for a given input vector (w/ Feature Eng.)"""
         x_p = self.dm.poly.transform(input_vector)
         x_s = self.dm.X_scaler.transform(x_p)
         y_s = self.model.predict(x_s)
         return self.dm.Y_scaler.inverse_transform(y_s)[0]
 
     def get_feature_importance(self) -> Tuple[List[str], List[float]]:
-        """Extracts feature importance from the trained ensemble"""
+        """Extracts global feature importance from the ensemble"""
         try:
             # Average importance across all target estimators
             imps = np.mean([est.feature_importances_ for est in self.model.estimators_], axis=0)
@@ -300,25 +300,29 @@ class ALDXGBoostModel:
 
 
 # ==============================================================================
-#  3. Physics Engine Layer (Theoretical Validation)
+#  Class 3: Physics Engine Layer (Theoretical Validation)
 # ==============================================================================
 class ALDPhysics:
     """
-    Validates AI predictions against Langmuir Adsorption & Knudsen Diffusion Models.
+    Validates AI predictions against Langmuir-Knudsen Diffusion Models.
+    Provides a 'sanity check' for Step Coverage predictions.
     """
     @staticmethod
     def calculate_step_coverage(P, T, Pulse, AR, Precursor, CD_nm):
+        """
+        Calculates theoretical Step Coverage based on kinetic theory.
+        """
         try:
             const = Config.PRECURSOR_CONSTANTS.get(Precursor, Config.PRECURSOR_CONSTANTS["TMA"])
             T_K = T + 273.15
             P_Pa = P * 133.322
-            L_m = AR * (CD_nm * 1e-9)
+            L = AR * (CD_nm * 1e-9)
             
-            # Molecular Properties
+            # Molecular Parameters
             d = const["diameter_m"]
             m_kg = const["mass_g_mol"] / 1000.0 / Config.N_A
             
-            # Kinetic Theory
+            # Kinetic Theory Calculations
             v_avg = np.sqrt(8 * Config.k_B * T_K / (np.pi * m_kg))
             lambda_m = (Config.k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
             
@@ -327,9 +331,9 @@ class ALDPhysics:
             D_bulk = (1.0/3.0) * lambda_m * v_avg
             D_eff = 1.0 / (1.0/D_Kn + 1.0/D_bulk)
             
-            # Thiele Modulus Calculation
+            # Thiele Modulus & Saturation Profile
             penetration_depth = np.sqrt(D_eff * Pulse + 1e-15)
-            phi = L_m / (penetration_depth + 1e-15)
+            phi = L / (penetration_depth + 1e-15)
             
             # SC Calculation
             if phi < 1.0: return 100.0 / (1.0 + phi) # Reaction Rate Limited
@@ -338,10 +342,10 @@ class ALDPhysics:
 
 
 # ==============================================================================
-#  4. Optimization Engine (Inverse Design)
+#  Class 4: Optimization Engine (Inverse Design)
 # ==============================================================================
 class ALDOptimizer:
-    """Handles Inverse Design using Scipy's Sequential Least Squares Programming (SLSQP)"""
+    """Handles Inverse Design using Scipy's SLSQP Optimization"""
     def __init__(self, dm: ALDDataManager, mm: ALDXGBoostModel):
         self.dm = dm
         self.mm = mm
@@ -355,7 +359,7 @@ class ALDOptimizer:
         # One-Hot Encoding Injection
         p_col = f"Precursor_{user_in['Precursor']}"
         if p_col in row.columns: row.at[0, p_col] = 1.0
-        # Defaulting to H2O/N2 for simplicity
+        # Defaulting to H2O/N2 for simplicity in optimizer
         if "Co-reactant_H2O" in row.columns: row.at[0, "Co-reactant_H2O"] = 1.0
         if "Purge Gas_N2" in row.columns: row.at[0, "Purge Gas_N2"] = 1.0
         
@@ -379,7 +383,7 @@ class ALDOptimizer:
                 pred_vals = self.mm.predict(vec)
                 res = dict(zip(self.dm.targets, pred_vals))
                 
-                # Cost Function
+                # Loss Function: (Predicted GPC - Ideal GPC)^2 + Roughness Penalty
                 target_gpc = (user_in["Thickness (nm)"] * 10) / init_cycles
                 gpc_loss = (res.get('GPC (A/cycle)', 0.1) - target_gpc)**2
                 rough_loss = res.get('Surface Roughness (RMS, nm)', 1.0)**2
@@ -387,14 +391,14 @@ class ALDOptimizer:
                 return 10000.0 * gpc_loss + 10.0 * rough_loss
             except: return 1e9
 
-        # Optimization Bounds
+        # Search Bounds
         bounds = [(150, 450), (0.01, 3.0), (0.05, 5.0), (1.0, 60.0), (50, 1000)]
-        x0 = [300, 0.5, 0.1, 5.0, 200]
+        x0 = [300, 0.5, 0.1, 5.0, 200] # Smart Start
         
-        # Run SLSQP
+        # Execute Optimization
         res = minimize(objective_function, x0, method='SLSQP', bounds=bounds, options={'maxiter': 30})
         
-        # Compile Results
+        # Result Compilation
         x = res.x
         opt_params = {
             "Temperature (c)": round(x[0], 1), "Pressure (torr)": round(x[1], 3),
@@ -418,7 +422,7 @@ class ALDOptimizer:
         return opt_params, final_pred_dict, {"Physics SC (%)": f"{phys_sc:.2f}%", "Cost": f"{res.fun:.4f}"}
 
     def run_simulation(self, user_in, target_col, sweep_range):
-        """Simulates process trends by sweeping a target parameter"""
+        """Runs a batch simulation sweeping a target parameter"""
         data = []
         for val in sweep_range:
             u_temp = user_in.copy()
@@ -442,15 +446,9 @@ def main_cli():
     print("="*70)
     
     logger = Logger("cli")
-    # Path Auto-Detection
-    csv_file = Config.DATA_FILE
-    if not os.path.exists(csv_file):
-        alt_path = os.path.join(os.path.dirname(__file__), Config.DATA_FILE)
-        if os.path.exists(alt_path): csv_file = alt_path
-        else: logger.error("Data file not found."); return
     
-    # System Initialization
-    dm = ALDDataManager(csv_file, logger)
+    # Initialize System
+    dm = ALDDataManager(Config.DATA_FILE_NAME, logger)
     mm = ALDXGBoostModel(dm, logger)
     opt = ALDOptimizer(dm, mm)
     
@@ -471,7 +469,7 @@ def main_cli():
 
     u_in = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
     
-    # 1. Optimization
+    # Run Optimization
     rec, pred, val = opt.optimize_recipe(u_in)
     
     print("\n" + "="*30 + " OPTIMIZATION RESULTS " + "="*30)
@@ -479,7 +477,7 @@ def main_cli():
     print(f"\n[📈 AI Prediction]\n{pd.Series(pred).to_string()}")
     print(f"\n[🔬 Validation]\n{val}")
     
-    # 2. Simulation (Dual Axis Plot)
+    # Simulation & Plotting
     print("\n📊 Generating Simulation Charts...")
     
     # CLI Simulation Settings
@@ -523,9 +521,10 @@ def main_gui():
     @st.cache_resource
     def get_system():
         logger = Logger("gui")
-        path = Config.DATA_FILE
+        path = Config.DATA_FILE_NAME
+        # Robust path finding
         if not os.path.exists(path): 
-            path = os.path.join(os.path.dirname(__file__), Config.DATA_FILE)
+            path = os.path.join(os.path.dirname(__file__), Config.DATA_FILE_NAME)
         
         dm = ALDDataManager(path, logger)
         mm = ALDXGBoostModel(dm, logger)
@@ -548,7 +547,7 @@ def main_gui():
 
     if st.sidebar.button("🔥 Run Optimization", type="primary"):
         u_in = {"Precursor": p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        with st.spinner("Running AI Optimization..."):
+        with st.spinner("Searching Optimal Recipe..."):
             st.session_state.res = opt.optimize_recipe(u_in)
             st.session_state.u_in = u_in
             st.session_state.done = True
