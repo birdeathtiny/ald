@@ -2,12 +2,7 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# Features:
-# 1. Data Augmentation & Feature Engineering (Polynomial)
-# 2. Hybrid Ensemble Model (PyTorch MLP + XGBoost + Random Forest)
-# 3. Physics-Informed Constraints (Step Coverage Calculation)
-# 4. Multi-Objective Optimization (SLSQP)
-# 5. XAI (SHAP Analysis) & Process Sensitivity Analysis
+# Update: 학습 진행률(Progress Bar) 시각화 기능 추가
 # ==============================================================================
 
 import streamlit as st
@@ -38,7 +33,6 @@ import shap
 # 1. 환경 설정 및 상수 정의
 # ------------------------------------------------------------------------------
 
-# 한글 폰트 설정 (OS별 자동 대응)
 import platform
 from matplotlib import font_manager, rc
 plt.rcParams['axes.unicode_minus'] = False
@@ -52,11 +46,9 @@ elif platform.system() == 'Windows':
     except:
         pass 
 
-# 물리/화학 상수
 N_A = 6.022e23
 k_B = 1.38e-23
 
-# 전구체 물성 정보
 PRECURSOR_CONSTANTS = {
     "TMA": {"mass_g_mol": 72.12, "diameter_m": 5.0e-10, "sticking_c": 0.005, "max_sites_q": 1.0e18},
     "TDMAH": {"mass_g_mol": 204.37, "diameter_m": 8.5e-10, "sticking_c": 0.001, "max_sites_q": 0.8e18},
@@ -64,48 +56,36 @@ PRECURSOR_CONSTANTS = {
     "Zr(NEt2)4": {"mass_g_mol": 379.79, "diameter_m": 11.0e-10, "sticking_c": 0.008, "max_sites_q": 0.6e18}
 }
 
-# 최적화 목적함수 가중치 (품질 우선순위)
 COST_WEIGHTS = {
-    "gpc": 10000.0,     # 두께 제어 (최우선)
-    "roughness": 10.0,  # 표면 거칠기
-    "uniformity": 50.0  # 균일도 (중요)
+    "gpc": 10000.0,
+    "roughness": 10.0,
+    "uniformity": 50.0 
 }
 
 # ------------------------------------------------------------------------------
-# 2. Deep Learning Model Definition (PyTorch)
+# 2. Deep Learning Model Definition
 # ------------------------------------------------------------------------------
 
 class ALDRegressor(nn.Module):
-    """
-    ALD 공정 예측을 위한 심층 신경망 (Deep Neural Network)
-    Batch Normalization과 Dropout을 적용하여 학습 안정성과 일반화 성능 확보
-    """
     def __init__(self, input_size, output_size):
         super(ALDRegressor, self).__init__()
-        
         self.layer_stack = nn.Sequential(
-            # Input Layer -> Hidden 1
             nn.Linear(input_size, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.1),
             
-            # Hidden 1 -> Hidden 2
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.1),
             
-            # Hidden 2 -> Hidden 3
             nn.Linear(128, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
             
-            # Hidden 3 -> Output Layer
             nn.Linear(64, output_size)
         )
-        
-        # 가중치 초기화 (He Initialization)
         self._init_weights()
 
     def _init_weights(self):
@@ -124,28 +104,22 @@ class ALDRegressor(nn.Module):
 
 class ALDOptimizer:
     
-    def __init__(self, file_path: str, mode: str = "cli"):
+    def __init__(self, file_path: str, mode: str = "cli", progress_callback=None):
         self.mode = mode
+        self.progress_callback = progress_callback # 진행률 콜백 함수 저장
         
-        # Hyperparameters & Device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.learning_rate = 0.001
         self.batch_size = 32
-        self.epochs = 1000 # 충분한 학습량
+        self.epochs = 1000
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
-        # Ensemble Models Container
-        self.models = {
-            'mlp': None,
-            'xgboost': None,
-            'rf': None
-        }
+        self.models = {'mlp': None, 'xgboost': None, 'rf': None}
         self.model_weights = {'mlp': 0.33, 'xgboost': 0.33, 'rf': 0.33}
         
-        # Data Processing Tools
         self.poly = PolynomialFeatures(degree=2, include_bias=False, interaction_only=False)
-        self.X_scaler = RobustScaler() # 이상치에 강건한 스케일러
+        self.X_scaler = RobustScaler()
         self.Y_scaler = RobustScaler()
         self.X_imputer = KNNImputer(n_neighbors=5)
         self.Y_imputer = KNNImputer(n_neighbors=5)
@@ -153,13 +127,22 @@ class ALDOptimizer:
         self.all_input_cols = []
         self.all_output_cols = []
         
-        # Pipeline Execution
+        # 데이터 로드 및 전처리 (진행률 0~10%)
+        self._update_progress(0.0, "데이터 로드 및 전처리 중...")
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
+        self._update_progress(0.1, "데이터 준비 완료. 모델 학습 시작...")
+        
+        # 모델 학습 (진행률 10~90%)
         self.performance_df = self._train_ensemble_models()
+        self._update_progress(1.0, "모든 학습 완료! 시스템 준비됨.")
+
+    def _update_progress(self, value, text):
+        """진행률 업데이트 헬퍼 함수"""
+        if self.progress_callback:
+            self.progress_callback(value, text)
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
-        """CSV 파일 로드 및 1차 전처리"""
         try:
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
@@ -169,7 +152,6 @@ class ALDOptimizer:
         
         df.replace('-', np.nan, inplace=True)
         
-        # 숫자형 변환
         numeric_cols = [
             'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
             'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)',
@@ -180,26 +162,22 @@ class ALDOptimizer:
         for col in numeric_cols:
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # 범주형 데이터 정제
         if 'Co-reactant' in df.columns:
             df['Co-reactant'] = df['Co-reactant'].replace({
                 'O3?': 'O3', 'H2O (Implied)': 'H2O',
                 'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'
             })
         
-        # 불필요 컬럼 제거
         drop_cols = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', 'Leakage Current Density (A/cm2)']
         df = df.drop(columns=[c for c in drop_cols if c in df.columns])
         if '순서' in df.columns: df = df.drop(columns=['순서'])
         
-        # One-Hot Encoding
         cat_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
         df_encoded = pd.get_dummies(df, columns=[c for c in cat_cols if c in df.columns], dummy_na=False)
         
         return df_encoded
 
     def _prepare_datasets(self, df: pd.DataFrame):
-        """데이터 분할, 증강, 스케일링, 피처 엔지니어링"""
         target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)',
@@ -216,23 +194,19 @@ class ALDOptimizer:
         X_raw = df[self.all_input_cols].values
         Y_raw = df[self.all_output_cols].values
         
-        # 결측치 보완
         X_imp = self.X_imputer.fit_transform(X_raw)
         Y_imp = self.Y_imputer.fit_transform(Y_raw)
         
-        # Data Augmentation (데이터 증강)
+        # Data Augmentation
         X_aug, Y_aug = self._augment_data(X_imp, Y_imp, noise=0.005, multiplier=2)
         
-        # Hold-out Split (Train / Val / Test)
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        # Polynomial Features (Feature Engineering)
         self.X_poly_train = self.poly.fit_transform(self.X_train)
         self.X_poly_val = self.poly.transform(self.X_val)
         self.X_poly_test = self.poly.transform(self.X_test)
         
-        # Scaling
         self.X_train_sc = self.X_scaler.fit_transform(self.X_poly_train)
         self.X_val_sc = self.X_scaler.transform(self.X_poly_val)
         self.X_test_sc = self.X_scaler.transform(self.X_poly_test)
@@ -252,49 +226,52 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        """3가지 모델 학습 및 가중치 최적화"""
-        
-        # 1. XGBoost
+        # 1. XGBoost (10% ~ 30%)
+        self._update_progress(0.15, "XGBoost 앙상블 학습 중... (1/3)")
         xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=500, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest
+        # 2. Random Forest (30% ~ 50%)
+        self._update_progress(0.35, "Random Forest 앙상블 학습 중... (2/3)")
         rf_model = RandomForestRegressor(n_estimators=200, max_depth=12, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (Custom Training Loop)
+        # 3. PyTorch MLP (50% ~ 90%)
+        self._update_progress(0.55, "Deep Learning (PyTorch MLP) 학습 시작... (3/3)")
         self._train_pytorch_mlp()
         
-        # 4. Calculate Ensemble Weights (Blending)
+        # 4. Weight Optimization
+        self._update_progress(0.95, "모델 가중치 최적화 및 최종 평가 중...")
         self._optimize_weights()
         
         return self._evaluate_ensemble()
 
     def _train_pytorch_mlp(self):
-        # Tensors
         X_t = torch.FloatTensor(self.X_train_sc).to(self.device)
         Y_t = torch.FloatTensor(self.Y_train_sc).to(self.device)
         
         dataset = TensorDataset(X_t, Y_t)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
-        # Model Init
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
         optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-5)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
         
-        # Weighted Loss for Uniformity
         loss_weights = torch.ones(self.output_dim).to(self.device)
         try:
             uni_idx = self.all_output_cols.index('Uniformity (%)')
             loss_weights[uni_idx] = 2.0 
         except: pass
         
+        def weighted_mse_loss(input, target, weight):
+            return torch.mean(weight * (input - target) ** 2)
+
         best_loss = float('inf')
         patience_counter = 0
         
+        # 학습 루프 (Progress Update 포함)
         for epoch in range(self.epochs):
             self.models['mlp'].train()
             epoch_loss = 0.0
@@ -303,13 +280,11 @@ class ALDOptimizer:
                 bx, by = bx.to(self.device), by.to(self.device)
                 optimizer.zero_grad()
                 pred = self.models['mlp'](bx)
-                # Weighted MSE
                 loss = torch.mean(loss_weights * (pred - by) ** 2)
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
             
-            # Validation Check
             self.models['mlp'].eval()
             with torch.no_grad():
                 val_x = torch.FloatTensor(self.X_val_sc).to(self.device)
@@ -319,21 +294,25 @@ class ALDOptimizer:
             
             scheduler.step(val_loss)
             
-            # Early Stopping
+            # 진행률 업데이트 (50% ~ 90% 구간 매핑)
+            if epoch % 50 == 0:
+                progress = 0.55 + (0.35 * (epoch / self.epochs))
+                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {val_loss:.6f})")
+
             if val_loss < best_loss:
                 best_loss = val_loss
                 patience_counter = 0
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if patience_counter >= 50: # Early Stop
+                if patience_counter >= 50:
+                    self._update_progress(0.90, f"조기 종료 (Early Stopping) - Epoch {epoch}")
                     break
                     
         self.models['mlp'].load_state_dict(torch.load(self.best_model_path, weights_only=True))
         if os.path.exists(self.best_model_path): os.remove(self.best_model_path)
 
     def _optimize_weights(self):
-        """Validation Set 성능 기반 가중치 계산"""
         p_xgb = self.models['xgboost'].predict(self.X_val_sc)
         p_rf = self.models['rf'].predict(self.X_val_sc)
         with torch.no_grad():
@@ -389,7 +368,6 @@ class ALDOptimizer:
     
     @staticmethod
     def _calc_physics(T_c, P_torr, pulse_s, AR, precursor, CD_m):
-        """물리적 제약조건 계산 (Step Coverage 등)"""
         const = PRECURSOR_CONSTANTS.get(precursor, PRECURSOR_CONSTANTS["TMA"])
         d, M = const["diameter_m"], const["mass_g_mol"] / 1000.0 / N_A
         T_K, P_Pa = T_c + 273.15, P_torr * 133.322
@@ -410,8 +388,6 @@ class ALDOptimizer:
         input_df = pd.DataFrame(columns=self.all_input_cols); input_df.loc[0] = 0.0
         for k, v in params.items():
             if k in input_df.columns: input_df.at[0, k] = v
-            
-        # One-hot setting
         for col, val in [("Precursor", precursor), ("Co-reactant", co_reactant), ("Purge Gas", purge_gas)]:
             if f"{col}_{val}" in input_df.columns: input_df.at[0, f"{col}_{val}"] = 1.0
             
@@ -429,36 +405,30 @@ class ALDOptimizer:
             params = {
                 "Temperature (c)": x[0], "Pressure (torr)": x[1], 
                 "Precursor_Pulse Time (s)": x[2], "Purge Time (s)": x[3], 
-                "Purge Gas Flow Rate (cm3/min)": x[4], "Cycles (n)": 100, # Temp cycles
+                "Purge Gas Flow Rate (cm3/min)": x[4], "Cycles (n)": 100, 
                 "Co-reactant_Pulse Time (s)": x[2]
             }
             try:
                 pred = self._predict_recipe(params, pre, co, purge)
                 gpc = pred.get('GPC (A/cycle)', 0.1)
                 cycles = th / (gpc + 1e-9)
-                
                 cost = (COST_WEIGHTS["roughness"] * (pred.get('Surface Roughness (RMS, nm)', 10))**2) + \
                        (COST_WEIGHTS["uniformity"] * (pred.get('Uniformity (%)', 100))**2)
-                
-                # Target Thickness Penalty
                 est_th = gpc * cycles
                 cost += 500 * (est_th - th)**2 
-                
                 return cost
             except: return 1e9
 
         def constraint(x):
             sc, _, _, _, _ = self._calc_physics(x[0], x[1], x[2], user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9)
-            return sc - 90.0 # SC > 90% constraint
+            return sc - 90.0
 
         bounds = [(150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500)]
         res = minimize(objective, [250, 0.1, 0.5, 5.0, 100], method='SLSQP', bounds=bounds, constraints={'type':'ineq', 'fun':constraint})
         
-        # Finalizing Recipe
         x = res.x
         rounded_vals = [round(v, 3) for v in x]
         
-        # Final prediction for cycles
         temp_params = {
             "Temperature (c)": rounded_vals[0], "Pressure (torr)": rounded_vals[1], 
             "Precursor_Pulse Time (s)": rounded_vals[2], "Co-reactant_Pulse Time (s)": rounded_vals[2],
@@ -468,61 +438,36 @@ class ALDOptimizer:
         gpc = max(0.001, pred_res.get('GPC (A/cycle)', 0.1))
         final_cycles = int(round(th / gpc))
         
-        # Build Result
         opt_recipe = temp_params.copy()
         opt_recipe["Cycles (n)"] = final_cycles
-        # [Bug Fix] Add missing keys
-        opt_recipe["Precursor"] = pre
-        opt_recipe["Co-reactant"] = co
-        opt_recipe["Purge Gas"] = purge
+        opt_recipe["Precursor"] = pre; opt_recipe["Co-reactant"] = co; opt_recipe["Purge Gas"] = purge
         
-        # Recalculate Final Prediction with rounded recipe
         final_pred = self._predict_recipe(opt_recipe, pre, co, purge)
-        final_pred['Thickness (nm)'] = gpc * final_cycles # Fix thickness calculation
+        final_pred['Thickness (nm)'] = gpc * final_cycles
         
         sc_val, lam, kn, phi, mode = self._calc_physics(rounded_vals[0], rounded_vals[1], rounded_vals[2], user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9)
-        
-        phy_info = {
-            "Mean Free Path (λ)": f"{lam:.2e} m", "Knudsen": f"{kn:.2f}", 
-            "Thiele Modulus": f"{phi:.4f}", "Mode": mode, "Physics SC": f"{sc_val:.2f}%"
-        }
+        phy_info = {"Mean Free Path (λ)": f"{lam:.2e} m", "Knudsen": f"{kn:.2f}", "Thiele Modulus": f"{phi:.4f}", "Mode": mode, "Physics SC": f"{sc_val:.2f}%"}
         
         return opt_recipe, final_pred, phy_info, res
 
     def analyze_sensitivity(self, recipe, user_input, x_col, y_col):
-        """공정 민감도 분석 (Sensitivity Analysis)"""
         if x_col not in recipe: return pd.DataFrame()
-        
         base_val = recipe[x_col]
         values = np.linspace(base_val * 0.7, base_val * 1.3, 20)
-        
         results = []
         pre, co, purge = user_input["Precursor"], recipe["Co-reactant"], recipe["Purge Gas"]
         
         for v in values:
-            temp = recipe.copy()
-            temp[x_col] = v
+            temp = recipe.copy(); temp[x_col] = v
             pred = self._predict_recipe(temp, pre, co, purge)
-            
-            # Physics SC
-            phys_sc, _, _, _, _ = self._calc_physics(
-                temp["Temperature (c)"], temp["Pressure (torr)"], temp["Precursor_Pulse Time (s)"],
-                user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9
-            )
-            
-            row = {x_col: v}
-            row.update(pred.to_dict())
-            row['Physics SC (%)'] = phys_sc
+            phys_sc, _, _, _, _ = self._calc_physics(temp["Temperature (c)"], temp["Pressure (torr)"], temp["Precursor_Pulse Time (s)"], user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9)
+            row = {x_col: v}; row.update(pred.to_dict()); row['Physics SC (%)'] = phys_sc
             results.append(row)
-            
         return pd.DataFrame(results)
 
     def get_shap(self):
-        # Explain XGBoost model (simplest for SHAP)
-        try:
-            sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
+        try: sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
         except: sc_idx = 0
-        
         model = self.models['xgboost'].estimators_[sc_idx]
         explainer = shap.TreeExplainer(model)
         shap_vals = explainer.shap_values(self.X_test_sc)
@@ -536,16 +481,33 @@ def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     st.title("✨ AI 기반 ALD 공정 최적화 시스템 (Pro Ver.)")
     
-    # Initialize Optimizer
-    @st.cache_resource(show_spinner="AI 모델 초기화 및 학습 중... (잠시만 기다려주세요)")
+    # 학습 상태를 표시할 빈 컨테이너 생성
+    progress_bar = st.empty()
+    progress_text = st.empty()
+
+    # Callback 함수 정의 (Optimizer 내부에서 호출됨)
+    def update_progress(value, text):
+        if 0.0 <= value <= 1.0:
+            progress_bar.progress(value)
+        progress_text.text(text)
+
+    @st.cache_resource(show_spinner=False) # Spinner 대신 커스텀 진행률 사용
     def get_optimizer():
         csv = "AI_ALD1.csv"
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         if not os.path.exists(path): return None
-        return ALDOptimizer(path, mode="gui")
+        
+        # Optimizer 초기화 시 콜백 함수 전달
+        return ALDOptimizer(path, mode="gui", progress_callback=update_progress)
 
+    # 모델 로드 (처음 실행 시에만 학습 진행됨)
     optimizer = get_optimizer()
+    
+    # 학습 완료 후 진행률 바 제거
+    progress_bar.empty()
+    progress_text.empty()
+
     if not optimizer:
         st.error("데이터 파일을 찾을 수 없습니다."); st.stop()
 
