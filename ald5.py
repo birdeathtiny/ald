@@ -1,14 +1,27 @@
 # ==============================================================================
-#  [Enterprise-Grade] AI ALD Process Optimization System (Magnificent Ver.)
+#  [Enterprise-Grade] AI ALD Process Optimization System (v48.0 Mega-Spec)
 # ==============================================================================
-#  System Architecture:
-#  1. Configuration Layer: Centralized constants, paths, and system settings.
-#  2. Logging Layer: Timestamped logging for CLI & Toast notifications for GUI.
-#  3. Data Layer (ETL): Robust CSV loading, Smart Imputation, Polynomial Feature Eng.
-#  4. Model Layer (AI): XGBoost Multi-Output Regressor (Real-Time Training).
-#  5. Physics Layer: Theoretical Validation (Langmuir-Knudsen Diffusion Models).
-#  6. Solver Layer: Inverse Design using Constrained SLSQP Optimization.
-#  7. Interface Layer: Dual-Mode Support (Interactive CLI & Streamlit Dashboard).
+#  System Architecture Overview:
+#  1. Global Configuration (Config): Centralized constants and system settings.
+#  2. Logging System (Logger): Dual-mode logging for CLI (Terminal) and GUI (Web).
+#  3. Data Pipeline (ALDDataManager):
+#     - Robust ETL (Extract-Transform-Load)
+#     - Smart Imputation (KNN)
+#     - Feature Engineering (Polynomial Degree 2 Interaction Terms)
+#     - Advanced Scaling (StandardScaler)
+#  4. AI Kernel (ALDXGBoostModel):
+#     - High-Performance XGBoost Regressor
+#     - Multi-Output Support (Simultaneous Prediction of 9 Properties)
+#     - Feature Importance Analysis
+#  5. Physics Engine (ALDPhysics):
+#     - Theoretical Validation using Langmuir Adsorption Model
+#     - Knudsen Diffusion Correction for High-Aspect Ratio structures
+#  6. Inverse Design Engine (ALDOptimizer):
+#     - Constrained Optimization using Scipy SLSQP
+#     - Adaptive Bounds and Penalty Functions
+#  7. User Interface (CLI & GUI):
+#     - Automatic Environment Detection
+#     - Interactive Dashboard with Real-Time Visualization
 # ==============================================================================
 
 import streamlit as st
@@ -23,10 +36,11 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple, Union
 
 # --- Backend Configuration for Headless Environments ---
+# Prevents GUI crash on servers like Streamlit Cloud
 if "streamlit" not in sys.modules:
     try:
         matplotlib.use('TkAgg')
-    except:
+    except ImportError:
         pass
 import matplotlib.pyplot as plt
 
@@ -49,20 +63,18 @@ warnings.filterwarnings('ignore')
 class Config:
     """Centralized Configuration for the ALD Optimizer System."""
     APP_NAME = "Enterprise ALD Optimizer"
-    VERSION = "v46.0 (Complete Edition)"
+    VERSION = "v48.0 (Mega-Spec)"
     DATA_FILE_NAME = "AI_ALD1.csv"
     
-    # Physical Constants for Simulation
-    N_A = 6.022e23  # Avogadro's number
-    k_B = 1.38e-23  # Boltzmann constant
-    
-    # Precursor Molecular Properties (Mass, Diameter, Sticking Coefficient)
+    # Physical Constants for Simulation (Molecular Properties)
     PRECURSOR_CONSTANTS = {
         "TMA": {"mass_g_mol": 72.12, "diameter_m": 5.0e-10, "sticking_c": 0.005},
         "TDMAH": {"mass_g_mol": 204.37, "diameter_m": 8.5e-10, "sticking_c": 0.001},
         "TEMAHf": {"mass_g_mol": 406.88, "diameter_m": 12.0e-10, "sticking_c": 0.005},
         "Zr(NEt2)4": {"mass_g_mol": 379.79, "diameter_m": 11.0e-10, "sticking_c": 0.008}
     }
+    N_A = 6.022e23  # Avogadro's number
+    k_B = 1.38e-23  # Boltzmann constant
     
     # Optimization Cost Weights
     COST_WEIGHTS = {
@@ -209,21 +221,20 @@ class ALDDataManager:
         
         # 6. Imputation & Feature Engineering (Polynomial)
         imp = KNNImputer(n_neighbors=5)
-        X_imputed = imp.fit_transform(X_raw)
+        X_imp = imp.fit_transform(X_raw)
+        Y_imp = imp.fit_transform(Y_raw)
         
         # 💡 Generating Interaction Features (e.g., Temp * Pressure)
-        X_poly = self.poly.fit_transform(X_imputed)
+        X_poly = self.poly.fit_transform(X_imp)
         self.feature_names = self.poly.get_feature_names_out(self.inputs)
         
-        imputer_y = KNNImputer(n_neighbors=5)
-        Y_imputed = imputer_y.fit_transform(Y_raw)
-
         # 7. Scaling & Train/Test Split
         self.X_train, self.X_test, self.Y_train, self.Y_test = train_test_split(
             self.X_scaler.fit_transform(X_poly), 
-            self.Y_scaler.fit_transform(Y_imputed), 
+            self.Y_scaler.fit_transform(Y_imp), 
             test_size=0.2, random_state=42
         )
+        # Store raw scaled test set for metrics
         self.Y_test_raw = self.Y_scaler.inverse_transform(self.Y_test)
         
         if self.logger.mode == "cli":
@@ -260,7 +271,7 @@ class ALDXGBoostModel:
             'max_depth': 6,           # Capture non-linear complexities
             'subsample': 0.85,        # Stochastic sampling for generalization
             'colsample_bytree': 0.85, # Feature diversity
-            'n_jobs': -1,             # Multi-core processing enabled
+            'n_jobs': -1,             # Parallel processing enabled
             'random_state': 42
         }
         
@@ -391,14 +402,14 @@ class ALDOptimizer:
                 return 10000.0 * gpc_loss + 10.0 * rough_loss
             except: return 1e9
 
-        # Search Bounds
+        # Optimized Bounds for ALD Process
         bounds = [(150, 450), (0.01, 3.0), (0.05, 5.0), (1.0, 60.0), (50, 1000)]
         x0 = [300, 0.5, 0.1, 5.0, 200] # Smart Start
         
-        # Execute Optimization
+        # Run SLSQP Optimization
         res = minimize(objective_function, x0, method='SLSQP', bounds=bounds, options={'maxiter': 30})
         
-        # Result Compilation
+        # Compile Results
         x = res.x
         opt_params = {
             "Temperature (c)": round(x[0], 1), "Pressure (torr)": round(x[1], 3),
@@ -422,7 +433,7 @@ class ALDOptimizer:
         return opt_params, final_pred_dict, {"Physics SC (%)": f"{phys_sc:.2f}%", "Cost": f"{res.fun:.4f}"}
 
     def run_simulation(self, user_in, target_col, sweep_range):
-        """Runs a batch simulation sweeping a target parameter"""
+        """Simulates process trends by sweeping a target parameter"""
         data = []
         for val in sweep_range:
             u_temp = user_in.copy()
@@ -446,9 +457,15 @@ def main_cli():
     print("="*70)
     
     logger = Logger("cli")
+    # Path Auto-Detection
+    csv_file = Config.DATA_FILE_NAME
+    if not os.path.exists(csv_file):
+        alt_path = os.path.join(os.path.dirname(__file__), Config.DATA_FILE_NAME)
+        if os.path.exists(alt_path): csv_file = alt_path
+        else: logger.error("Data file not found."); return
     
     # Initialize System
-    dm = ALDDataManager(Config.DATA_FILE_NAME, logger)
+    dm = ALDDataManager(csv_file, logger)
     mm = ALDXGBoostModel(dm, logger)
     opt = ALDOptimizer(dm, mm)
     
@@ -469,7 +486,7 @@ def main_cli():
 
     u_in = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
     
-    # Run Optimization
+    # 1. Optimization
     rec, pred, val = opt.optimize_recipe(u_in)
     
     print("\n" + "="*30 + " OPTIMIZATION RESULTS " + "="*30)
@@ -477,7 +494,7 @@ def main_cli():
     print(f"\n[📈 AI Prediction]\n{pd.Series(pred).to_string()}")
     print(f"\n[🔬 Validation]\n{val}")
     
-    # Simulation & Plotting
+    # 2. Simulation & Plotting
     print("\n📊 Generating Simulation Charts...")
     
     # CLI Simulation Settings
