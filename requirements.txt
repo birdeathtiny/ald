@@ -1,8 +1,10 @@
 streamlit
-numpy
 pandas
+numpy
+matplotlib
+seaborn
 scikit-learn
 scipy
-matplotlib
-xgboost
 torch
+xgboost
+shap
