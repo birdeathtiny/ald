@@ -7,6 +7,7 @@ import os
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
@@ -15,12 +16,12 @@ from typing import Dict, Any, List, Tuple
 from scipy.optimize import minimize
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.multioutput import MultiOutputRegressor # XGBoost 다중 출력을 위해 추가
+from sklearn.multioutput import MultiOutputRegressor
 import itertools
-import xgboost as xgb # XGBoost 추가
-import shap # SHAP 추가
+import xgboost as xgb
+import shap
 
-# 한글 폰트 설정 (Mac/Windows 호환)
+# 한글 폰트 설정
 import platform
 from matplotlib import font_manager, rc
 plt.rcParams['axes.unicode_minus'] = False
@@ -32,9 +33,7 @@ elif platform.system() == 'Windows':
         font_name = font_manager.FontProperties(fname=path).get_name()
         rc('font', family=font_name)
     except:
-        pass # 폰트 설정 실패시 기본 폰트 사용
-else:
-    print('Unknown system... sorry~~~~')
+        pass 
 
 # --- 1. 물리/화학 상수 테이블 정의 ---
 N_A = 6.022e23
@@ -75,7 +74,6 @@ class ALDOptimizer:
     def __init__(self, file_path: str, mode: str = "cli"):
         self.mode = mode
         
-        # 하이퍼파라미터 정의 (튜닝 결과 반영)
         self.final_learning_rate = 0.00195
         self.final_dropout_rate = 0.28
         self.final_batch_size = 16
@@ -87,31 +85,25 @@ class ALDOptimizer:
         self.DEFAULT_GPC_GUESS_A = 1.0 
         self.model_comparison_results = {}
         self.performance_df = None
-
-        # XGBoost 모델 저장 변수
         self.xgb_model = None
 
-        # 스케일러 및 모델 정의
         self.X_scaler = StandardScaler()
         self.Y_scaler = StandardScaler()
         self.final_model = None
         self.ALL_INPUT_FEATURES_ORDERED = []
         self.ALL_OUTPUT_FEATURES_ORDERED = []
         
-        # 데이터 로드, 전처리 및 학습
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
         
         self._hyperparameter_search() 
         self._compare_with_rf()
-        self._train_model() # MLP 학습
+        self._train_model()
         
-        # 최종 모델 평가 결과를 저장
         _, _, _, _ = self._evaluate_model(torch.from_numpy(self.X_test_scaled).float(), torch.from_numpy(self.Y_test_scaled).float())
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
-            # 절대 경로가 포함된 file_path를 사용하여 로드 시도
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
             msg = f"\n[치명적 오류] 파일 로드 실패: {file_path}. 오류: {e}"
@@ -119,12 +111,14 @@ class ALDOptimizer:
             else: raise FileNotFoundError(f"'{file_path}' 파일을 찾거나 로드할 수 없습니다. 경로를 확인하세요.")
         
         df.replace('-', np.nan, inplace=True)
+        
+        # [수정됨] Leakage Current Density 제거
         cols_to_convert = [
             'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
             'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)',
             'Co-reactant Flow Rate (cm3/min)', 'Thickness (nm)', 'Surface Roughness (RMS, nm)',
             'Uniformity (%)', 'Step Coverage (sc, %)', 'Density (g/cm3)', 'GPC (A/cycle)',
-            'Aspect Ratio (AR)', 'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)',
+            'Aspect Ratio (AR)', 'Dielectric Constant (ε)',
             'Breakdown Field (MV/cm)'
         ]
         for col in cols_to_convert:
@@ -134,7 +128,8 @@ class ALDOptimizer:
             df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
             df['Co-reactant'] = df['Co-reactant'].replace({'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
         
-        cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)']
+        # 삭제할 컬럼 목록에 Leakage Current Density가 있다면 추가로 확실히 제거
+        cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', 'Leakage Current Density (A/cm2)']
         existing_cols_to_drop = [c for c in cols_to_drop_high_nan if c in df.columns]
         df_processed = df.drop(columns=existing_cols_to_drop)
         
@@ -146,10 +141,11 @@ class ALDOptimizer:
         return df_encoded
 
     def _prepare_datasets(self, df_encoded: pd.DataFrame):
+        # [수정됨] Target Columns에서 Leakage Current Density 제거
         target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)',
-            'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)',
+            'Dielectric Constant (ε)',
             'Breakdown Field (MV/cm)', 'Step Coverage (sc, %)'
         ]
         cols_to_ignore_for_ai = ['Aspect Ratio (AR)']
@@ -229,26 +225,17 @@ class ALDOptimizer:
             'R2_GPC': r2_rf[self.ALL_OUTPUT_FEATURES_ORDERED.index('GPC (A/cycle)')].round(4)
         }
 
-    # --- XGBoost 학습 및 비교 메서드 (수정됨: early_stopping 제거) ---
     def _train_and_compare_xgboost(self):
-        """
-        MLP와 XGBoost의 성능을 비교하고, SHAP 분석을 위한 모델을 준비합니다.
-        """
         xgb_estimator = xgb.XGBRegressor(
             objective='reg:squarederror',
             n_estimators=1000,
             learning_rate=0.05,
             max_depth=5,
-            # early_stopping_rounds 제거 (에러 수정)
             n_jobs=-1
         )
-        
         self.xgb_model = MultiOutputRegressor(xgb_estimator)
-        
-        # XGBoost 학습
         self.xgb_model.fit(self.X_train_final, self.Y_train_final)
         
-        # 예측 및 평가
         Y_pred_xgb_scaled = self.xgb_model.predict(self.X_test_scaled)
         Y_pred_xgb = self.Y_scaler.inverse_transform(Y_pred_xgb_scaled)
         
@@ -260,33 +247,20 @@ class ALDOptimizer:
             'RMSE_mean': rmse_xgb.mean().round(4),
             'R2_GPC': r2_xgb[self.ALL_OUTPUT_FEATURES_ORDERED.index('GPC (A/cycle)')].round(4)
         }
-        
         return self.model_comparison_results
 
-    # --- SHAP 설명자 반환 메서드 ---
     def get_shap_explainer(self):
-        """
-        SHAP 분석을 위한 Explainer 객체 반환
-        주요 타겟인 'Step Coverage'에 대한 영향력을 분석합니다.
-        """
         if self.xgb_model is None:
             self._train_and_compare_xgboost()
 
-        # Step Coverage의 인덱스 찾기
         try:
             sc_index = self.ALL_OUTPUT_FEATURES_ORDERED.index('Step Coverage (sc, %)')
         except ValueError:
-            # SC가 없다면 0번 인덱스 사용
             sc_index = 0
         
-        # XGBoost 내부의 해당 타겟 모델 추출
         target_model = self.xgb_model.estimators_[sc_index]
-        
-        # Explainer 생성
         explainer = shap.TreeExplainer(target_model)
-        # SHAP 값 계산 (테스트 데이터 샘플 사용)
         shap_values = explainer.shap_values(self.X_test_scaled)
-        
         return explainer, shap_values, self.X_test_scaled
 
     def _train_model(self):
@@ -320,7 +294,6 @@ class ALDOptimizer:
         self.final_model = model
         if os.path.exists(self.BEST_MODEL_PATH): os.remove(self.BEST_MODEL_PATH)
         
-        # MLP는 기본으로 결과 초기화 (나중에 evaluate_model에서 채움)
         self.model_comparison_results['MLP (Deep Learning)'] = {'R2_mean': 0, 'RMSE_mean': 0, 'R2_GPC': 0}
 
     def _evaluate_model(self, X_test_tensor, Y_test_tensor):
@@ -351,7 +324,6 @@ class ALDOptimizer:
 
         return test_rmse, RMSE_dict, R2_dict, RRMSE_dict
 
-    # --- 물리 모델 및 최적화 함수 ---
     @staticmethod
     def _calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
         const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
@@ -404,11 +376,8 @@ class ALDOptimizer:
     def _constraint_sc(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
         target_ar = user_input["Target AR"]
         CD_m = user_input["CD (nm)"] * 1e-9 
-        
         TARGET_SC_MIN = 98.0 if target_ar <= 5 else 90.0 if target_ar <= 15 else 85.0
-        
         phys_sc = self._calculate_physics_sc(x[1], x[0], x[2], target_ar, user_input["Precursor"], CD_m)
-        
         return phys_sc - TARGET_SC_MIN
 
     def _objective_function(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
@@ -467,28 +436,52 @@ class ALDOptimizer:
 
         return opt_recipe, final_pred, valid_data, stats
 
-    def simulate_target_sweep(self, base_user_input, target_param_name, range_values):
+    # --- NEW: 공정 민감도 분석 (목표값 고정, 변수 변화) ---
+    def analyze_process_sensitivity(self, opt_recipe, user_input, x_col, y_col):
+        try:
+            current_x_val = opt_recipe[x_col]
+        except KeyError:
+            return pd.DataFrame() 
+
+        # 스윕 범위 설정 (현재 값 기준 ±20%)
+        sweep_range = np.linspace(current_x_val * 0.8, current_x_val * 1.2, 20)
+        
         results = []
-        for val in range_values:
-            current_input = base_user_input.copy()
-            current_input[target_param_name] = val
+        
+        for val in sweep_range:
+            temp_recipe = opt_recipe.copy()
+            temp_recipe[x_col] = val
             
-            opt_recipe, pred_results, _, _ = self.generate_optimal_recipe(current_input, silent=True)
+            sim_params = {
+                "Temperature (c)": temp_recipe.get("Temperature (c)", opt_recipe["Temperature (c)"]),
+                "Pressure (torr)": temp_recipe.get("Pressure (torr)", opt_recipe["Pressure (torr)"]),
+                "Precursor_Pulse Time (s)": temp_recipe.get("Precursor Pulse Time (s)", opt_recipe["Precursor Pulse Time (s)"]),
+                "Co-reactant_Pulse Time (s)": temp_recipe.get("Co-reactant Pulse Time (s)", opt_recipe["Co-reactant Pulse Time (s)"]),
+                "Purge Time (s)": temp_recipe.get("Purge Time (s)", opt_recipe["Purge Time (s)"]),
+                "Purge Gas Flow Rate (cm3/min)": temp_recipe.get("Purge Gas Flow Rate (cm3/min)", opt_recipe["Purge Gas Flow Rate (cm3/min)"]),
+                "Cycles (n)": temp_recipe.get("Cycles (n)", opt_recipe["Cycles (n)"])
+            }
+            
+            pred = self._predict_from_recipe(sim_params, user_input["Precursor"], temp_recipe["Co-reactant"], temp_recipe["Purge Gas"])
             
             phys_sc = self._calculate_physics_sc(
-                opt_recipe['Pressure (torr)'],
-                opt_recipe['Temperature (c)'],
-                opt_recipe['Precursor Pulse Time (s)'],
-                current_input['Target AR'],
-                current_input['Precursor'],
-                current_input['CD (nm)'] * 1e-9
+                sim_params["Pressure (torr)"],
+                sim_params["Temperature (c)"],
+                sim_params["Precursor_Pulse Time (s)"],
+                user_input["Target AR"],
+                user_input["Precursor"],
+                user_input["CD (nm)"] * 1e-9
             )
-
-            row = {target_param_name: val}
-            row.update(opt_recipe)
-            row.update(pred_results.to_dict())
+            
+            row = {x_col: val}
+            row.update(pred.to_dict())
             row['Physics SC (%)'] = phys_sc
+            
+            for k, v in sim_params.items():
+                row[k] = v
+                
             results.append(row)
+            
         return pd.DataFrame(results)
 
 
@@ -502,28 +495,18 @@ def main_gui():
     @st.cache_resource(show_spinner="AI 모델 및 데이터 준비 중 (초기 1회만 실행)...")
     def load_optimizer(): 
         csv_file_name = "AI_ALD1.csv"
-        
         current_dir = os.path.dirname(os.path.abspath(__file__))
         full_file_path = os.path.join(current_dir, csv_file_name)
-
         if not os.path.exists(full_file_path):
             full_file_path = csv_file_name 
-
         if not os.path.exists(full_file_path):
             st.error(f"❌ 데이터 파일 '{csv_file_name}'을(를) 찾을 수 없습니다.")
-            st.warning(f"현재 탐색 경로: **{full_file_path}**")
-            st.info("💡 해결법: 'AI_ALD1.csv' 파일을 이 파이썬 코드와 같은 폴더에 업로드해주세요.")
             st.stop()
-            
         return ALDOptimizer(file_path=full_file_path, mode="gui") 
 
-    try: 
-        optimizer = load_optimizer()
-    except Exception as e: 
-        st.error(f"모델 로드/학습 실패: {e}")
-        st.stop()
+    try: optimizer = load_optimizer()
+    except Exception as e: st.error(f"모델 로드/학습 실패: {e}"); st.stop()
 
-    # --- XGBoost 학습 및 비교 실행 (처음 한 번만 실행) ---
     if 'xgb_trained' not in st.session_state:
         with st.spinner("AI 모델 고도화 진행 중... (MLP vs XGBoost 성능 비교 & SHAP 준비)"):
             optimizer._train_and_compare_xgboost()
@@ -540,131 +523,116 @@ def main_gui():
 
     if st.sidebar.button("🚀 최적 레시피 생성", type="primary"):
         user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        
         with st.spinner("최적화 진행 중 (SLSQP)..."):
             opt_recipe, pred_results, val_data, opt_stats = optimizer.generate_optimal_recipe(user_input=user_input)
             st.session_state.opt_result = (opt_recipe, pred_results, val_data, opt_stats, user_input)
-        
         st.sidebar.success("✅ 최적화 완료!")
         
     if st.session_state.opt_result:
         opt_recipe, pred_results, val_data, opt_stats, user_input = st.session_state.opt_result
         
-        # 탭 3개로 확장 (결과, 경향성, AI해석)
-        tab1, tab2, tab3 = st.tabs(["📄 결과 리포트", "📊 최적화 경향 분석", "🔍 AI 해석 (XAI)"])
+        tab1, tab2, tab3 = st.tabs(["📄 결과 리포트", "📊 공정 민감도 분석", "🔍 AI 해석 (XAI)"])
 
         with tab1:
             st.subheader("모델 선택 근거 및 성능 평가")
-            
             col_perf1, col_perf2 = st.columns([1, 2])
             with col_perf1:
                 st.markdown("##### 1) 모델별 성능 비교 (R² Score)")
                 comp_df = pd.DataFrame(optimizer.model_comparison_results).T
                 comp_df.index.name = "Model"
                 st.dataframe(comp_df, use_container_width=True)
-                st.caption("Deep Learning (MLP)와 Ensemble (XGBoost, RF)의 성능을 비교하여 최적 모델을 선정했습니다.")
-
             with col_perf2:
                 st.markdown("##### 2) 최종 선택 모델(MLP) 상세 성능")
                 st.dataframe(optimizer.performance_df, use_container_width=True)
-                st.caption("RRMSE(%)는 상대 오차율을 나타냅니다. 핵심 물성(GPC, Roughness, SC)은 낮은 오차율을 보입니다.")
-
             st.divider()
-
             st.subheader(f"💡 AI 최적 레시피 (목표 두께: {user_input['Thickness (nm)']:.1f} nm)")
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1:
                 st.markdown("##### 레시피 파라미터")
                 recipe_df = pd.DataFrame.from_dict({k: opt_recipe[k] for k in ['Cycles (n)', 'Temperature (c)', 'Pressure (torr)', 'Precursor Pulse Time (s)', 'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)']}, orient='index', columns=['Value'])
                 st.dataframe(recipe_df, use_container_width=True)
-            
             with c2:
                 st.markdown("##### 예측 물성 결과")
                 st.metric("최종 예측 두께 (nm)", f"{pred_results['Thickness (nm)']:.4f}", delta=f"{pred_results['Thickness (nm)'] - user_input['Thickness (nm)']:.4f} (nm)")
                 st.dataframe(pred_results.to_frame(name='Predicted').drop('Thickness (nm)'), use_container_width=True)
-                
             with c3:
                 st.markdown("##### 물리/최적화 검증")
                 st.dataframe(pd.DataFrame.from_dict(val_data, orient='index', columns=['Value']), use_container_width=True)
                 st.caption(f"최종 비용: {opt_stats['Final Cost']}")
-                
 
         with tab2:
-            st.header("📊 최적 공정 경향 분석")
-            st.info("선택된 목표 변수를 변경할 때, 최적화 시스템이 다른 파라미터를 조정하는 경향을 보여줍니다.")
+            st.header("📊 공정 민감도 분석 (Sensitivity Analysis)")
+            st.info("최적화된 레시피를 고정하고, 단일 변수 변화에 따른 물성 변화를 시뮬레이션합니다.")
             
-            col_sel1, col_sel2, col_sel3 = st.columns(3)
-            with col_sel1:
-                target_param = st.selectbox("1. X축: 목표값", ["Thickness (nm)", "Target AR"], key='sweep_x_select', index=0 if 'Thickness (nm)' in user_input else 1)
-            with col_sel2:
-                y_left = st.selectbox("2. 왼쪽 Y축: 공정 조건 (Recipe)", ["Temperature (c)", "Pressure (torr)", "Precursor Pulse Time (s)", "Purge Time (s)", "Cycles (n)"], key='sweep_yl_select')
-            with col_sel3:
-                y_right = st.selectbox("3. 오른쪽 Y축: 예측 물성 (Property)", ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"], key='sweep_yr_select')
-
-            current_val = user_input[target_param]
-            sweep_range = np.linspace(current_val * 0.5, current_val * 1.5, 10) 
+            # 그래프 옵션 정의 (X축: 공정 변수, Y축: 물성)
+            plot_options = {
+                "GPC vs Temperature (온도)": ("Temperature (c)", "GPC (A/cycle)"),
+                "GPC vs Pulse Time (펄스 시간)": ("Precursor Pulse Time (s)", "GPC (A/cycle)"),
+                "GPC vs Pressure (압력)": ("Pressure (torr)", "GPC (A/cycle)"),
+                "Temperature vs Pressure (온도 vs 압력)": ("Pressure (torr)", "Temperature (c)") 
+            }
             
-            with st.spinner(f"'{target_param}' 변화에 따른 최적화 경향 시뮬레이션 중..."):
-                sweep_df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
-
-            # --- Graph 1: Dual Axis Trend (공정 조건 vs 물성) ---
-            fig, ax1 = plt.subplots(figsize=(10, 5))
-            line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
-            ax1.set_xlabel(f"Target {target_param}"); ax1.set_ylabel(f"Optimal {y_left}", color='r'); ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
+            selected_plot = st.selectbox("📈 표시할 그래프 선택:", list(plot_options.keys()))
+            x_col_name, y_col_name = plot_options[selected_plot]
             
-            ax2 = ax1.twinx()
-            line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Predicted: {y_right}")
-            ax2.set_ylabel(f"Predicted {y_right}", color='b'); ax2.tick_params(axis='y', labelcolor='b')
+            with st.spinner(f"'{x_col_name}' 변화에 따른 시뮬레이션 수행 중..."):
+                sensitivity_df = optimizer.analyze_process_sensitivity(opt_recipe, user_input, x_col_name, y_col_name)
 
-            lines = line1 + line2; labels = [l.get_label() for l in lines]
-            ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
-            plt.title(f"Optimization Trend: {y_left} vs {y_right}")
-            st.pyplot(fig)
+            if not sensitivity_df.empty:
+                fig, ax = plt.subplots(figsize=(10, 5))
+                
+                opt_x = opt_recipe.get(x_col_name)
+                opt_y = pred_results.get(y_col_name) if y_col_name in pred_results else opt_recipe.get(y_col_name)
+                
+                sns.lineplot(data=sensitivity_df, x=x_col_name, y=y_col_name, marker='o', ax=ax, color='steelblue', label='Trend')
+                
+                if opt_x is not None:
+                    ax.scatter([opt_x], [opt_y], color='red', s=100, zorder=5, label='Optimal Point')
+                
+                ax.set_xlabel(x_col_name)
+                ax.set_ylabel(y_col_name)
+                ax.grid(True, linestyle='--', alpha=0.5)
+                ax.legend()
+                
+                plt.title(f"Process Sensitivity: {selected_plot}")
+                st.pyplot(fig)
+                
+                # --- SC Trend (보조 그래프) ---
+                if 'Step Coverage (sc, %)' in sensitivity_df.columns:
+                    st.divider()
+                    st.subheader(f"⚖️ Step Coverage 변화 ({x_col_name} 변화 시)")
+                    fig2, ax_sc = plt.subplots(figsize=(10, 4))
+                    ax_sc.plot(sensitivity_df[x_col_name], sensitivity_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction')
+                    ax_sc.plot(sensitivity_df[x_col_name], sensitivity_df['Physics SC (%)'], 'k--x', label='Physics Model')
+                    ax_sc.set_xlabel(x_col_name)
+                    ax_sc.set_ylabel("Step Coverage (%)")
+                    
+                    # [수정] 동적 Y축 범위 설정 (Zoom-In)
+                    sc_min = min(sensitivity_df['Step Coverage (sc, %)'].min(), sensitivity_df['Physics SC (%)'].min())
+                    sc_max = max(sensitivity_df['Step Coverage (sc, %)'].max(), sensitivity_df['Physics SC (%)'].max())
+                    margin = (sc_max - sc_min) * 0.1 if sc_max != sc_min else 1.0 # 10% 여유
+                    ax_sc.set_ylim(max(0, sc_min - margin), min(100.5, sc_max + margin))
 
-            # --- Graph 2: SC Trend Comparison (AI 예측 vs 물리 모델) ---
-            st.divider()
-            st.subheader(f"⚖️ Step Coverage Trend: AI Prediction vs Physics Model")
-            
-            fig2, ax_sc = plt.subplots(figsize=(10, 4))
-            ax_sc.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction (Data)')
-            ax_sc.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model (Constraint)')
-            ax_sc.set_xlabel(f"Target {target_param}"); ax_sc.set_ylabel("Step Coverage (%)"); ax_sc.set_ylim(0, 110)
-            ax_sc.legend(); ax_sc.grid(True, linestyle='--', alpha=0.5)
-            plt.title(f"SC Reliability Check vs {target_param}")
-            st.pyplot(fig2)
+                    ax_sc.legend()
+                    ax_sc.grid(True, linestyle='--', alpha=0.5)
+                    st.pyplot(fig2)
+            else:
+                st.warning("선택한 변수에 대한 시뮬레이션 데이터를 생성할 수 없습니다.")
 
-        # --- NEW TAB: XAI Analysis ---
         with tab3:
             st.header("🔍 AI 판단 근거 분석 (SHAP)")
             st.info("AI 모델(XGBoost)이 'Step Coverage'를 예측할 때 어떤 공정 변수가 가장 큰 영향을 미쳤는지 분석합니다.")
-            
             if st.button("SHAP 분석 실행"):
-                with st.spinner("SHAP 값을 계산 중입니다... (복잡도에 따라 시간이 소요될 수 있습니다)"):
+                with st.spinner("SHAP 값을 계산 중입니다..."):
                     try:
                         explainer, shap_values, X_test_data = optimizer.get_shap_explainer()
-                        
-                        # Feature Name 매핑
                         feature_names = optimizer.ALL_INPUT_FEATURES_ORDERED
-                        
-                        # Summary Plot 그리기
                         st.markdown("##### 1. 변수 중요도 (Feature Importance)")
                         fig_shap, ax_shap = plt.subplots()
                         shap.summary_plot(shap_values, X_test_data, feature_names=feature_names, show=False)
                         st.pyplot(fig_shap)
-                        
-                        st.markdown("""
-                        **[그래프 해석 가이드]**
-                        * **Y축 (변수명):** 위쪽에 있을수록 결과(SC)에 미치는 영향력이 큽니다.
-                        * **색상 (Color):** <span style='color:red'>빨간색</span>은 변수 값이 높음, <span style='color:blue'>파란색</span>은 변수 값이 낮음을 의미합니다.
-                        * **X축 (SHAP Value):** 오른쪽(+)으로 갈수록 SC를 높이는 긍정적 영향, 왼쪽(-)으로 갈수록 SC를 낮추는 부정적 영향입니다.
-                        * *예시: Temperature의 빨간 점들이 왼쪽에 몰려 있다면, '온도가 높을수록 SC가 낮아진다'는 것을 AI가 학습한 것입니다.*
-                        """, unsafe_allow_html=True)
-                        
                     except Exception as e:
                         st.error(f"SHAP 분석 중 오류가 발생했습니다: {e}")
 
-# ==========================================
-# 🚦 실행 모드 자동 감지 (Streamlit 실행)
-# ==========================================
 if __name__ == "__main__":
     main_gui()
