@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.ticker as ticker  # 축 서식 정밀 제어를 위해 추가
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
@@ -112,7 +113,6 @@ class ALDOptimizer:
         
         df.replace('-', np.nan, inplace=True)
         
-        # [수정됨] Leakage Current Density 제거
         cols_to_convert = [
             'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
             'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)',
@@ -128,7 +128,6 @@ class ALDOptimizer:
             df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
             df['Co-reactant'] = df['Co-reactant'].replace({'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
         
-        # 삭제할 컬럼 목록에 Leakage Current Density가 있다면 추가로 확실히 제거
         cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', 'Leakage Current Density (A/cm2)']
         existing_cols_to_drop = [c for c in cols_to_drop_high_nan if c in df.columns]
         df_processed = df.drop(columns=existing_cols_to_drop)
@@ -141,7 +140,6 @@ class ALDOptimizer:
         return df_encoded
 
     def _prepare_datasets(self, df_encoded: pd.DataFrame):
-        # [수정됨] Target Columns에서 Leakage Current Density 제거
         target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)',
@@ -371,7 +369,7 @@ class ALDOptimizer:
         self.final_model.eval()
         with torch.no_grad(): Y_pred_scaled_tensor = self.final_model(X_tensor)
         Y_pred_unscaled = self.Y_scaler.inverse_transform(Y_pred_scaled_tensor.numpy())[0]
-        return pd.Series(Y_pred_unscaled, index=self.ALL_OUTPUT_FEATURES_ORDERED).round(4)
+        return pd.Series(Y_pred_unscaled, index=self.ALL_OUTPUT_FEATURES_ORDERED)
 
     def _constraint_sc(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
         target_ar = user_input["Target AR"]
@@ -562,14 +560,14 @@ def main_gui():
 
         with tab2:
             st.header("📊 공정 민감도 분석 (Sensitivity Analysis)")
-            st.info("최적화된 레시피를 고정하고, 단일 변수 변화에 따른 물성 변화를 시뮬레이션합니다.")
+            st.info("최적화된 레시피를 고정하고, 단일 변수 변화에 따른 물성 변화를 정밀하게 분석합니다.")
             
-            # 그래프 옵션 정의 (X축: 공정 변수, Y축: 물성)
+            # [수정] 그래프 옵션: 요청하신 Pulse Time vs SC 포함
             plot_options = {
                 "GPC vs Temperature (온도)": ("Temperature (c)", "GPC (A/cycle)"),
                 "GPC vs Pulse Time (펄스 시간)": ("Precursor Pulse Time (s)", "GPC (A/cycle)"),
                 "GPC vs Pressure (압력)": ("Pressure (torr)", "GPC (A/cycle)"),
-                "Temperature vs Pressure (온도 vs 압력)": ("Pressure (torr)", "Temperature (c)") 
+                "Step Coverage vs Pulse Time (피복성)": ("Precursor Pulse Time (s)", "Step Coverage (sc, %)")
             }
             
             selected_plot = st.selectbox("📈 표시할 그래프 선택:", list(plot_options.keys()))
@@ -592,6 +590,18 @@ def main_gui():
                 ax.set_xlabel(x_col_name)
                 ax.set_ylabel(y_col_name)
                 ax.grid(True, linestyle='--', alpha=0.5)
+                
+                # [수정] Y축 정밀 서식 및 자동 스케일링 (Zoom-in)
+                ax.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.5f')) # 소수점 5자리 표시
+                
+                # 데이터 범위가 너무 작으면(Noise 수준) 강제로 Zoom-in
+                y_values = sensitivity_df[y_col_name]
+                y_min, y_max = y_values.min(), y_values.max()
+                
+                if (y_max - y_min) < 1e-4: # 변화폭이 0.0001 미만일 때
+                    mid = (y_max + y_min) / 2
+                    ax.set_ylim(mid - 0.0001, mid + 0.0001) # 아주 미세한 변화도 보이게 설정
+                
                 ax.legend()
                 
                 plt.title(f"Process Sensitivity: {selected_plot}")
@@ -607,10 +617,10 @@ def main_gui():
                     ax_sc.set_xlabel(x_col_name)
                     ax_sc.set_ylabel("Step Coverage (%)")
                     
-                    # [수정] 동적 Y축 범위 설정 (Zoom-In)
+                    # 동적 Y축 범위 설정 (Zoom-In)
                     sc_min = min(sensitivity_df['Step Coverage (sc, %)'].min(), sensitivity_df['Physics SC (%)'].min())
                     sc_max = max(sensitivity_df['Step Coverage (sc, %)'].max(), sensitivity_df['Physics SC (%)'].max())
-                    margin = (sc_max - sc_min) * 0.1 if sc_max != sc_min else 1.0 # 10% 여유
+                    margin = (sc_max - sc_min) * 0.1 if sc_max != sc_min else 1.0 
                     ax_sc.set_ylim(max(0, sc_min - margin), min(100.5, sc_max + margin))
 
                     ax_sc.legend()
