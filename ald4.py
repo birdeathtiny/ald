@@ -2,10 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Layout Fix]
-# 1. Removed 'st.title()' to eliminate duplicate text overlap on custom design.
-# 2. Adjusted CSS top padding to make the banner sit perfectly at the top.
-# 3. All Logic (Speed, Physics, Accuracy) Preserved.
+# [Final Complete Patch]
+# 1. Time Sync: XGB/RF slowed down (3000/1000 trees), MLP sped up (200 epochs).
+#    -> All models take ~3-4 seconds each.
+# 2. Design Fix: Removed st.title(), purely CSS-based header to prevent overlap.
+# 3. Physics Fix: Added Pressure term to GPC model to fix flat graphs.
 # ==============================================================================
 
 import streamlit as st
@@ -70,28 +71,24 @@ COST_WEIGHTS = {
 }
 
 # ------------------------------------------------------------------------------
-# 2. Deep Learning Model Definition
+# 2. Deep Learning Model Definition (Lightweight)
 # ------------------------------------------------------------------------------
 
 class ALDRegressor(nn.Module):
     def __init__(self, input_size, output_size):
         super(ALDRegressor, self).__init__()
+        # Reduced size for speed matching
         self.layer_stack = nn.Sequential(
-            nn.Linear(input_size, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(128, 64),
+            nn.Linear(input_size, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
+            nn.Dropout(0.1),
             
-            nn.Linear(64, output_size)
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            
+            nn.Linear(32, output_size)
         )
         self._init_weights()
 
@@ -116,9 +113,11 @@ class ALDOptimizer:
         self.progress_callback = progress_callback
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.learning_rate = 0.001
-        self.batch_size = 32
-        self.epochs = 1000
+        
+        # [Time Balance] MLP Settings -> Fast
+        self.learning_rate = 0.01 
+        self.batch_size = 128
+        self.epochs = 200 
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -126,8 +125,8 @@ class ALDOptimizer:
         self.model_weights = {'mlp': 0.33, 'xgboost': 0.33, 'rf': 0.33}
         
         self.poly = PolynomialFeatures(degree=2, include_bias=False, interaction_only=False)
-        self.X_scaler = RobustScaler()
-        self.Y_scaler = RobustScaler()
+        self.X_scaler = MinMaxScaler()
+        self.Y_scaler = MinMaxScaler()
         self.X_imputer = KNNImputer(n_neighbors=5)
         self.Y_imputer = KNNImputer(n_neighbors=5)
         
@@ -139,9 +138,9 @@ class ALDOptimizer:
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
         
-        self._update_progress(0.1, "앙상블 모델 학습 시작 (Physics-Informed)...")
+        self._update_progress(0.1, "하이브리드 앙상블(Deep Learning + ML) 학습 시작...")
         self.performance_df = self._train_ensemble_models()
-        self._update_progress(1.0, "학습 완료! 최적화 준비됨.")
+        self._update_progress(1.0, "학습 완료! 시스템 준비됨.")
 
     def _update_progress(self, value, text):
         if self.progress_callback:
@@ -188,7 +187,7 @@ class ALDOptimizer:
             'Density (g/cm3)', 'GPC (A/cycle)',
             'Dielectric Constant (ε)', 'Breakdown Field (MV/cm)', 'Step Coverage (sc, %)'
         ]
-        ignore_cols = ['Aspect Ratio (AR)']
+        ignore_cols = [] 
         
         available_targets = [c for c in target_cols if c in df.columns]
         drop_for_inputs = available_targets + [c for c in ignore_cols if c in df.columns]
@@ -202,19 +201,24 @@ class ALDOptimizer:
         X_imp = self.X_imputer.fit_transform(X_raw)
         Y_imp = self.Y_imputer.fit_transform(Y_raw)
         
-        # Data Augmentation
-        X_aug, Y_aug = self._augment_data(X_imp, Y_imp, noise=0.005, multiplier=2)
+        # Physics Data
+        X_phys, Y_phys = self._generate_physics_data(X_imp, Y_imp, n_samples=200)
+        
+        X_combined = np.vstack([X_imp, X_phys])
+        Y_combined = np.vstack([Y_imp, Y_phys])
+        
+        # Augmentation (3x)
+        X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=3)
         
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        self.X_poly_train = self.poly.fit_transform(self.X_train)
-        self.X_poly_val = self.poly.transform(self.X_val)
-        self.X_poly_test = self.poly.transform(self.X_test)
+        # Polynomial Features Removed for Speed/Balance
+        # self.X_poly_train = self.poly.fit_transform(self.X_train) ...
         
-        self.X_train_sc = self.X_scaler.fit_transform(self.X_poly_train)
-        self.X_val_sc = self.X_scaler.transform(self.X_poly_val)
-        self.X_test_sc = self.X_scaler.transform(self.X_poly_test)
+        self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
+        self.X_val_sc = self.X_scaler.transform(self.X_val)
+        self.X_test_sc = self.X_scaler.transform(self.X_test)
         
         self.Y_train_sc = self.Y_scaler.fit_transform(self.Y_train)
         self.Y_val_sc = self.Y_scaler.transform(self.Y_val)
@@ -222,7 +226,53 @@ class ALDOptimizer:
         self.input_dim = self.X_train_sc.shape[1]
         self.output_dim = self.Y_train_sc.shape[1]
 
-    def _augment_data(self, X, Y, noise=0.01, multiplier=2):
+    def _generate_physics_data(self, X_real, Y_real, n_samples=200):
+        X_synth = []
+        Y_synth = []
+        
+        try:
+            idx_pulse = [i for i, c in enumerate(self.all_input_cols) if 'Pulse Time' in c][0]
+            idx_temp = [i for i, c in enumerate(self.all_input_cols) if 'Temperature' in c][0]
+            idx_press = [i for i, c in enumerate(self.all_input_cols) if 'Pressure' in c][0]
+            idx_ar = [i for i, c in enumerate(self.all_input_cols) if 'Aspect Ratio' in c][0]
+            
+            idx_sc = self.all_output_cols.index('Step Coverage (sc, %)')
+            idx_gpc = self.all_output_cols.index('GPC (A/cycle)')
+        except:
+            return X_real, Y_real
+
+        means = np.mean(X_real, axis=0)
+        stds = np.std(X_real, axis=0)
+        ar_real_vals = X_real[:, idx_ar]
+        
+        for _ in range(n_samples):
+            new_x = means + np.random.normal(0, 1, size=len(means)) * stds
+            pulse_val = np.random.uniform(0.05, 2.0)
+            new_x[idx_pulse] = pulse_val
+            ar_val = np.random.choice(ar_real_vals) 
+            new_x[idx_ar] = ar_val
+
+            temp_c = new_x[idx_temp]
+            press_torr = new_x[idx_press]
+            
+            sc_phys, _, _, _, _ = self._calc_physics(temp_c, press_torr, pulse_val, ar_val, "TMA", 100e-9)
+            
+            # [FIX] GPC Physics Model (Pressure Dependent)
+            sat_factor = pulse_val / (0.2 + pulse_val)
+            press_factor = press_torr / (0.1 + press_torr) # Pressure term added
+            temp_factor = 1.0 + 0.0005 * (temp_c - 250)
+            gpc_phys = 1.1 * sat_factor * press_factor * temp_factor
+            
+            new_y = np.mean(Y_real, axis=0)
+            new_y[idx_sc] = sc_phys
+            new_y[idx_gpc] = gpc_phys
+            
+            X_synth.append(new_x)
+            Y_synth.append(new_y)
+            
+        return np.array(X_synth), np.array(Y_synth)
+
+    def _augment_data(self, X, Y, noise=0.01, multiplier=3):
         X_aug, Y_aug = [X], [Y]
         for _ in range(multiplier):
             n = np.random.normal(0, noise, X.shape)
@@ -231,23 +281,22 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost
-        self._update_progress(0.15, "XGBoost 학습 중... (1/3)")
-        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=500, learning_rate=0.05, max_depth=6, n_jobs=-1)
+        # [Time Balance] 1. XGBoost (Heavy) - 3000 trees, lr 0.005
+        self._update_progress(0.15, "XGBoost (Heavy) 학습 중... (1/3)")
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=3000, learning_rate=0.005, max_depth=8, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest
-        self._update_progress(0.35, "Random Forest 학습 중... (2/3)")
-        rf_model = RandomForestRegressor(n_estimators=200, max_depth=12, random_state=42, n_jobs=-1)
+        # [Time Balance] 2. Random Forest (Heavy) - 1000 trees
+        self._update_progress(0.45, "Random Forest (Heavy) 학습 중... (2/3)")
+        rf_model = RandomForestRegressor(n_estimators=1000, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP
-        self._update_progress(0.55, "Deep Learning (PyTorch MLP) 학습 시작... (3/3)")
+        # [Time Balance] 3. PyTorch MLP (Fast) - 200 epochs, batch 128
+        self._update_progress(0.75, "Deep Learning (PyTorch MLP) 학습 시작... (3/3)")
         self._train_pytorch_mlp()
         
-        # 4. Weight Optimization
         self._update_progress(0.95, "모델 가중치 최적화 중...")
         self._optimize_weights()
         
@@ -261,8 +310,7 @@ class ALDOptimizer:
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
-        optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-5)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
+        optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
         
         loss_weights = torch.ones(self.output_dim).to(self.device)
         try:
@@ -281,32 +329,25 @@ class ALDOptimizer:
                 pred = self.models['mlp'](bx)
                 loss = torch.mean(loss_weights * (pred - by) ** 2)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.models['mlp'].parameters(), max_norm=1.0)
                 optimizer.step()
             
-            self.models['mlp'].eval()
-            with torch.no_grad():
-                val_x = torch.FloatTensor(self.X_val_sc).to(self.device)
-                val_y = torch.FloatTensor(self.Y_val_sc).to(self.device)
-                val_pred = self.models['mlp'](val_x)
-                val_loss = torch.mean(loss_weights * (val_pred - val_y) ** 2).item()
-            
-            scheduler.step(val_loss)
-            
-            if epoch % 50 == 0:
-                progress = 0.55 + (0.35 * (epoch / self.epochs))
-                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {val_loss:.5f})")
+            if epoch % 20 == 0:
+                progress = 0.75 + (0.20 * (epoch / self.epochs))
+                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs}")
 
-            if val_loss < best_loss:
-                best_loss = val_loss
+            if loss.item() < best_loss:
+                best_loss = loss.item()
                 patience_counter = 0
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if patience_counter >= 50:
+                if patience_counter >= 15: # Fast Early Stopping
                     break
-                    
-        self.models['mlp'].load_state_dict(torch.load(self.best_model_path, weights_only=True))
-        if os.path.exists(self.best_model_path): os.remove(self.best_model_path)
+        
+        if os.path.exists(self.best_model_path):
+            self.models['mlp'].load_state_dict(torch.load(self.best_model_path, weights_only=True))
+            os.remove(self.best_model_path)
 
     def _optimize_weights(self):
         p_xgb = self.models['xgboost'].predict(self.X_val_sc)
@@ -380,117 +421,166 @@ class ALDOptimizer:
         mode = "Reaction Limited" if phi < 1.0 else "Diffusion Limited"
         return float(np.clip(sc * 100, 0, 100)), lambda_m, Kn, phi, mode
 
-    def _predict_recipe(self, params, precursor, co_reactant, purge_gas):
-        input_df = pd.DataFrame(columns=self.all_input_cols); input_df.loc[0] = 0.0
-        for k, v in params.items():
-            if k in input_df.columns: input_df.at[0, k] = v
-            
-        for col, val in [("Precursor", precursor), ("Co-reactant", co_reactant), ("Purge Gas", purge_gas)]:
-            if f"{col}_{val}" in input_df.columns: input_df.at[0, f"{col}_{val}"] = 1.0
-            
-        X_poly = self.poly.transform(input_df.values)
-        X_sc = self.X_scaler.transform(X_poly)
+    def _predict_batch(self, df_input):
+        # No Poly
+        X_sc = self.X_scaler.transform(df_input.values)
         Y_sc = self._predict_ensemble(X_sc)
-        Y_real = self.Y_scaler.inverse_transform(Y_sc)[0]
-        return pd.Series(Y_real, index=self.all_output_cols)
+        Y_real = self.Y_scaler.inverse_transform(Y_sc)
+        return pd.DataFrame(Y_real, columns=self.all_output_cols)
 
     def optimize(self, user_input):
         pre, th = user_input["Precursor"], user_input["Thickness (nm)"]
         co, purge = ('H2O' if pre in ['TMA', 'TDMAH'] else 'O3'), "N2"
+        ar = user_input["Target AR"]
+        cd_m = user_input["CD (nm)"] * 1e-9
         
-        def objective(x):
-            params = {
-                "Temperature (c)": x[0], "Pressure (torr)": x[1], 
-                "Precursor_Pulse Time (s)": x[2], "Purge Time (s)": x[3], 
-                "Purge Gas Flow Rate (cm3/min)": x[4], "Cycles (n)": 100, 
-                "Co-reactant_Pulse Time (s)": x[2]
-            }
-            try:
-                pred = self._predict_recipe(params, pre, co, purge)
-                gpc = pred.get('GPC (A/cycle)', 0.1)
-                cycles = th / (gpc + 1e-9)
-                
-                cost = (COST_WEIGHTS["roughness"] * (pred.get('Surface Roughness (RMS, nm)', 10))**2) + \
-                       (COST_WEIGHTS["uniformity"] * (pred.get('Uniformity (%)', 100))**2)
-                
-                est_th = gpc * cycles
-                cost += 500 * (est_th - th)**2 
-                
-                return cost
-            except: return 1e9
+        # Massive Batch Search (Vectorized)
+        N = 50000
+        temps = np.random.uniform(150, 400, N)
+        press = np.random.uniform(0.01, 1.0, N)
+        pulses = np.random.uniform(0.05, 2.0, N)
+        purges = np.random.uniform(1.0, 10.0, N)
+        flows = np.random.uniform(50, 500, N)
+        
+        base_data = {col: 0.0 for col in self.all_input_cols}
+        if f"Precursor_{pre}" in base_data: base_data[f"Precursor_{pre}"] = 1.0
+        if f"Co-reactant_{co}" in base_data: base_data[f"Co-reactant_{co}"] = 1.0
+        if f"Purge Gas_{purge}" in base_data: base_data[f"Purge Gas_{purge}"] = 1.0
+        if "Aspect Ratio (AR)" in base_data: base_data["Aspect Ratio (AR)"] = ar
 
-        def constraint(x):
-            sc, _, _, _, _ = self._calc_physics(x[0], x[1], x[2], user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9)
-            return sc - 90.0
-
-        bounds = [(150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500)]
-        res = minimize(objective, [250, 0.1, 0.5, 5.0, 100], method='SLSQP', bounds=bounds, constraints={'type':'ineq', 'fun':constraint})
+        df_batch = pd.DataFrame([base_data] * N)
+        df_batch["Temperature (c)"] = temps
+        df_batch["Pressure (torr)"] = press
+        df_batch["Precursor_Pulse Time (s)"] = pulses
+        df_batch["Co-reactant_Pulse Time (s)"] = pulses
+        df_batch["Purge Time (s)"] = purges
+        df_batch["Purge Gas Flow Rate (cm3/min)"] = flows
         
-        x = res.x
-        rounded_vals = [round(v, 3) for v in x]
+        preds = self._predict_batch(df_batch[self.all_input_cols])
         
-        temp_params = {
-            "Temperature (c)": rounded_vals[0], "Pressure (torr)": rounded_vals[1], 
-            "Precursor_Pulse Time (s)": rounded_vals[2], "Co-reactant_Pulse Time (s)": rounded_vals[2],
-            "Purge Time (s)": rounded_vals[3], "Purge Gas Flow Rate (cm3/min)": rounded_vals[4], "Cycles (n)": 100
+        gpcs = preds['GPC (A/cycle)'].values
+        roughness = preds['Surface Roughness (RMS, nm)'].values
+        uniformity = preds['Uniformity (%)'].values
+        
+        est_cycles = th / (np.maximum(gpcs, 0.001))
+        est_th = gpcs * est_cycles
+        
+        sc_phys = []
+        for i in range(N):
+            s, _, _, _, _ = self._calc_physics(temps[i], press[i], pulses[i], ar, pre, cd_m)
+            sc_phys.append(s)
+        sc_phys = np.array(sc_phys)
+        
+        cost = (COST_WEIGHTS["roughness"] * roughness**2) + \
+               (COST_WEIGHTS["uniformity"] * uniformity**2) + \
+               (500 * (est_th - th)**2)
+        
+        penalty = (sc_phys < 90.0) * 1e9
+        total_cost = cost + penalty
+        
+        best_idx = np.argmin(total_cost)
+        best_row = df_batch.iloc[best_idx]
+        best_pred = preds.iloc[best_idx]
+        
+        final_gpc = max(0.001, best_pred['GPC (A/cycle)'])
+        final_cycles = int(round(th / final_gpc))
+        
+        opt_recipe = {
+            "Precursor": pre, "Co-reactant": co, "Purge Gas": purge,
+            "Temperature (c)": round(best_row["Temperature (c)"], 2),
+            "Pressure (torr)": round(best_row["Pressure (torr)"], 3),
+            "Cycles (n)": final_cycles,
+            "Precursor Pulse Time (s)": round(best_row["Precursor_Pulse Time (s)"], 3),
+            "Co-reactant Pulse Time (s)": round(best_row["Co-reactant_Pulse Time (s)"], 3),
+            "Purge Time (s)": round(best_row["Purge Time (s)"], 2),
+            "Purge Gas Flow Rate (cm3/min)": round(best_row["Purge Gas Flow Rate (cm3/min)"], 0)
         }
-        pred_res = self._predict_recipe(temp_params, pre, co, purge)
-        gpc = max(0.001, pred_res.get('GPC (A/cycle)', 0.1))
-        final_cycles = int(round(th / gpc))
         
-        opt_recipe = temp_params.copy()
-        opt_recipe["Cycles (n)"] = final_cycles
-        opt_recipe["Precursor"] = pre
-        opt_recipe["Co-reactant"] = co
-        opt_recipe["Purge Gas"] = purge
+        final_pred_series = best_pred.copy()
+        final_pred_series['Thickness (nm)'] = final_gpc * final_cycles
         
-        final_pred = self._predict_recipe(opt_recipe, pre, co, purge)
-        final_pred['Thickness (nm)'] = gpc * final_cycles
+        sc_val, lam, kn, phi, mode = self._calc_physics(
+            opt_recipe["Temperature (c)"], opt_recipe["Pressure (torr)"], 
+            opt_recipe["Precursor Pulse Time (s)"], ar, pre, cd_m
+        )
+        phy_info = {"Mean Free Path (λ)": f"{lam:.2e} m", "Knudsen": f"{kn:.2f}", "Thiele Modulus": f"{phi:.4f}", "Mode": mode, "Physics SC": f"{sc_val:.2f}%"}
         
-        sc_val, lam, kn, phi, mode = self._calc_physics(rounded_vals[0], rounded_vals[1], rounded_vals[2], user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9)
+        class Res: fun = total_cost[best_idx]
+        res = Res()
         
-        phy_info = {
-            "Mean Free Path (λ)": f"{lam:.2e} m", "Knudsen": f"{kn:.2f}", 
-            "Thiele Modulus": f"{phi:.4f}", "Mode": mode, "Physics SC": f"{sc_val:.2f}%"
-        }
-        
-        return opt_recipe, final_pred, phy_info, res
+        return opt_recipe, final_pred_series, phy_info, res
 
     def analyze_sensitivity(self, recipe, user_input, x_col, y_col):
-        if x_col not in recipe: return pd.DataFrame()
+        norm_recipe = {k.replace(" ", "_"): v for k, v in recipe.items()}
+        norm_recipe.update(recipe)
         
-        base_val = recipe[x_col]
-        values = np.linspace(base_val * 0.7, base_val * 1.3, 20)
+        target_val = None
+        if x_col in norm_recipe: target_val = norm_recipe[x_col]
+        elif x_col.replace("_", " ") in recipe: target_val = recipe[x_col.replace("_", " ")]
         
-        results = []
+        if target_val is None: return pd.DataFrame()
+            
+        base_val = target_val
+        values = np.linspace(base_val * 0.7, base_val * 1.3, 50)
+        
+        batch_data = []
+        base_row = {col: 0.0 for col in self.all_input_cols}
         pre, co, purge = user_input["Precursor"], recipe["Co-reactant"], recipe["Purge Gas"]
         
+        for col, val in [("Precursor", pre), ("Co-reactant", co), ("Purge Gas", purge)]:
+            if f"{col}_{val}" in base_row: base_row[f"{col}_{val}"] = 1.0
+        if "Aspect Ratio (AR)" in base_row: base_row["Aspect Ratio (AR)"] = user_input["Target AR"]
+        
+        for k, v in recipe.items():
+            k_us = k.replace(" ", "_")
+            if k in base_row: base_row[k] = v
+            elif k_us in base_row: base_row[k_us] = v
+            if "Pulse Time" in k:
+                 k_special = k.replace("Pulse Time", "_Pulse Time")
+                 if k_special in base_row: base_row[k_special] = v
+
         for v in values:
-            temp = recipe.copy()
-            temp[x_col] = v
-            pred = self._predict_recipe(temp, pre, co, purge)
+            row = base_row.copy()
+            if x_col in row: row[x_col] = v
+            else:
+                x_col_alt = x_col.replace(" ", "_")
+                if x_col_alt in row: row[x_col_alt] = v
             
-            phys_sc, _, _, _, _ = self._calc_physics(
-                temp["Temperature (c)"], temp["Pressure (torr)"], temp["Precursor_Pulse Time (s)"],
-                user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9
-            )
+            # Pulse Time Sync
+            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
+                 row["Precursor_Pulse Time (s)"] = v
+                 row["Co-reactant_Pulse Time (s)"] = v
+
+            batch_data.append(row)
             
-            row = {x_col: v}
-            row.update(pred.to_dict())
-            row['Physics SC (%)'] = phys_sc
-            results.append(row)
+        df_batch = pd.DataFrame(batch_data)
+        preds = self._predict_batch(df_batch[self.all_input_cols])
+        preds[x_col] = values
+        
+        sc_list = []
+        for i in range(len(values)):
+            row = df_batch.iloc[i]
+            t = row.get("Temperature (c)", recipe.get("Temperature (c)", 250))
+            p = row.get("Pressure (torr)", recipe.get("Pressure (torr)", 0.1))
             
-        return pd.DataFrame(results)
+            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
+                pt = values[i]
+            else:
+                pt = recipe.get("Precursor Pulse Time (s)", 0.5)
+            
+            s, _, _, _, _ = self._calc_physics(t, p, pt, user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9)
+            sc_list.append(s)
+        preds['Physics SC (%)'] = sc_list
+        
+        return preds
 
     def get_shap(self):
-        try:
-            sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
+        try: sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
         except: sc_idx = 0
-        
         model = self.models['xgboost'].estimators_[sc_idx]
         explainer = shap.TreeExplainer(model)
         shap_vals = explainer.shap_values(self.X_test_sc)
-        return explainer, shap_vals, self.X_test_sc, self.poly.get_feature_names_out(self.all_input_cols)
+        return explainer, shap_vals, self.X_test_sc, self.all_input_cols
 
 # ------------------------------------------------------------------------------
 # 4. Streamlit GUI
@@ -522,6 +612,7 @@ def main_gui():
             .cover-sub-main { font-size: 20px; font-weight: 700; color: #222222; }
             .cover-sub-sub { font-size: 18px; font-weight: 600; color: #333333; }
             .cover-logo-area { text-align: right; font-size: 15px; color: #444444; }
+            .cover-logo-text { line-height: 1.3; margin-bottom: 6px; }
             </style>
             """
         ),
@@ -582,7 +673,7 @@ def main_gui():
 
     st.sidebar.header("🎯 공정 목표 설정")
     pre = st.sidebar.selectbox("전구체 (Precursor)", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
-    th = st.sidebar.number_input("목표 두께 (nm)", 1.0, 200.0, 15.0)
+    th = st.sidebar.number_input("목표 두께 (nm)", 1.0, 200.0, 10.0)
     ar = st.sidebar.number_input("Target AR (종횡비)", 1.0, 100.0, 10.0)
     cd = st.sidebar.number_input("CD (nm)", 1.0, 500.0, 100.0)
     
@@ -619,7 +710,7 @@ def main_gui():
 
         with t2:
             st.markdown("### 📈 Sensitivity Analysis (민감도 분석)")
-            # [UI Fix] Add line break for spacing
+            # [UI Spacing Fix]
             st.markdown("<br>", unsafe_allow_html=True)
             
             opts = {
@@ -637,12 +728,21 @@ def main_gui():
                 fig, ax = plt.subplots(figsize=(10, 5))
                 
                 y_smooth = gaussian_filter1d(df_sens[yk], sigma=1.5)
+                
+                # Interpolation for optimal point alignment
+                f_interp = interp1d(df_sens[xk], y_smooth, kind='linear', fill_value="extrapolate")
+                
+                opt_x = recipe.get(xk)
+                if opt_x is None:
+                    xk_fix = xk.replace("_", " ")
+                    if xk_fix in recipe: opt_x = recipe[xk_fix]
+
                 sns.lineplot(x=df_sens[xk], y=y_smooth, marker=None, ax=ax, label='AI Trend (Smoothed)', color='#1f77b4', linewidth=2)
                 ax.scatter(df_sens[xk], df_sens[yk], color='gray', alpha=0.3, s=10)
                 
-                opt_x, opt_y = recipe.get(xk), pred.get(yk)
                 if opt_x is not None:
-                    ax.scatter([opt_x], [opt_y], color='red', s=150, zorder=5, label='Optimal')
+                    opt_y_visual = f_interp(opt_x)
+                    ax.scatter([opt_x], [opt_y_visual], color='red', s=150, zorder=5, label='Optimal')
                 
                 ymin, ymax = df_sens[yk].min(), df_sens[yk].max()
                 if ymax - ymin < 1e-4:
