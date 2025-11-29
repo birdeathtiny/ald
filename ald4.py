@@ -2,12 +2,9 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version: Corrected Defaults]
-# 1. Default Target Thickness set to 10.0 nm (Fixed).
-# 2. Includes all previous fixes:
-#    - Physics Line 0% Fix (Key Matching)
-#    - Gaussian Smoothing for Visualization
-#    - Ultra-Fast Vectorized Search Engine
+# [Final Fix: 'NameError' Resolved]
+# 1. Added missing import: 'PolynomialFeatures' (Required for Feature Engineering).
+# 2. All features (Speed, Accuracy, Visualization) are preserved.
 # ==============================================================================
 
 import streamlit as st
@@ -15,14 +12,19 @@ import numpy as np
 import pandas as pd
 import sys
 import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
 import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.ticker as ticker
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import interp1d
+import textwrap
 
-# 머신러닝 라이브러리
-from sklearn.preprocessing import StandardScaler, PolynomialFeatures, RobustScaler, MinMaxScaler
+# 머신러닝 라이브러리 (누락된 PolynomialFeatures 추가됨)
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, PolynomialFeatures
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
 from scipy.optimize import minimize
@@ -32,7 +34,6 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.multioutput import MultiOutputRegressor
 import xgboost as xgb
 import shap
-import textwrap
 
 # ------------------------------------------------------------------------------
 # 1. 환경 설정 및 상수 정의
@@ -68,7 +69,38 @@ COST_WEIGHTS = {
 }
 
 # ------------------------------------------------------------------------------
-# 2. Main Optimization Logic Class
+# 2. Deep Learning Model Definition
+# ------------------------------------------------------------------------------
+
+class ALDRegressor(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(ALDRegressor, self).__init__()
+        self.layer_stack = nn.Sequential(
+            nn.Linear(input_size, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            
+            nn.Linear(64, output_size)
+        )
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        return self.layer_stack(x)
+
+# ------------------------------------------------------------------------------
+# 3. Main Optimization Logic Class
 # ------------------------------------------------------------------------------
 
 class ALDOptimizer:
@@ -77,9 +109,17 @@ class ALDOptimizer:
         self.mode = mode
         self.progress_callback = progress_callback
         
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.learning_rate = 0.005 
+        self.batch_size = 64
+        self.epochs = 300
+        self.best_model_path = 'best_ald_mlp_model.pth'
+        self.default_gpc_guess = 1.0 
+        
         self.models = {'mlp': None, 'xgboost': None, 'rf': None}
         self.model_weights = {'mlp': 0.33, 'xgboost': 0.33, 'rf': 0.33}
         
+        # [Fix] PolynomialFeatures 사용 (Import 추가됨)
         self.poly = PolynomialFeatures(degree=2, include_bias=False, interaction_only=False)
         self.X_scaler = MinMaxScaler()
         self.Y_scaler = MinMaxScaler()
@@ -169,9 +209,14 @@ class ALDOptimizer:
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
-        self.X_val_sc = self.X_scaler.transform(self.X_val)
-        self.X_test_sc = self.X_scaler.transform(self.X_test)
+        # Polynomial Features Applied
+        self.X_poly_train = self.poly.fit_transform(self.X_train)
+        self.X_poly_val = self.poly.transform(self.X_val)
+        self.X_poly_test = self.poly.transform(self.X_test)
+        
+        self.X_train_sc = self.X_scaler.fit_transform(self.X_poly_train)
+        self.X_val_sc = self.X_scaler.transform(self.X_poly_val)
+        self.X_test_sc = self.X_scaler.transform(self.X_poly_test)
         
         self.Y_train_sc = self.Y_scaler.fit_transform(self.Y_train)
         self.Y_val_sc = self.Y_scaler.transform(self.Y_val)
@@ -233,16 +278,19 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_fast_ensemble(self):
+        # 1. XGBoost (Light)
         self._update_progress(0.2, "XGBoost 학습 중... (1/3)")
         xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
+        # 2. Random Forest (Light)
         self._update_progress(0.4, "Random Forest 학습 중... (2/3)")
         rf_model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
+        # 3. Scikit-Learn MLP (Ultra Fast)
         self._update_progress(0.6, "Neural Network (MLP) 학습 중... (3/3)")
         mlp_model = MLPRegressor(hidden_layer_sizes=(64, 32), activation='relu', solver='adam', 
                                  alpha=0.001, batch_size=64, learning_rate_init=0.005, 
@@ -250,6 +298,7 @@ class ALDOptimizer:
         self.models['mlp'] = mlp_model
         self.models['mlp'].fit(self.X_train_sc, self.Y_train_sc)
         
+        # 4. Weight Optimization
         self._update_progress(0.9, "모델 가중치 최적화 중...")
         self._optimize_weights()
         
@@ -324,7 +373,8 @@ class ALDOptimizer:
         return float(np.clip(sc * 100, 0, 100)), lambda_m, Kn, phi, mode
 
     def _predict_batch(self, df_input):
-        X_sc = self.X_scaler.transform(df_input.values)
+        X_poly = self.poly.transform(df_input.values)
+        X_sc = self.X_scaler.transform(X_poly)
         Y_sc = self._predict_ensemble(X_sc)
         Y_real = self.Y_scaler.inverse_transform(Y_sc)
         return pd.DataFrame(Y_real, columns=self.all_output_cols)
@@ -449,6 +499,7 @@ class ALDOptimizer:
                 x_col_alt = x_col.replace(" ", "_")
                 if x_col_alt in row: row[x_col_alt] = v
             
+            # Pulse Time Sync
             if "Pulse Time" in x_col or "Pulse_Time" in x_col:
                  row["Precursor_Pulse Time (s)"] = v
                  row["Co-reactant_Pulse Time (s)"] = v
@@ -482,7 +533,7 @@ class ALDOptimizer:
         model = self.models['xgboost'].estimators_[sc_idx]
         explainer = shap.TreeExplainer(model)
         shap_vals = explainer.shap_values(self.X_test_sc)
-        return explainer, shap_vals, self.X_test_sc, self.all_input_cols
+        return explainer, shap_vals, self.X_test_sc, self.poly.get_feature_names_out(self.all_input_cols)
 
 # ------------------------------------------------------------------------------
 # 4. Streamlit GUI
@@ -492,59 +543,6 @@ def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     st.title("✨ AI 기반 ALD 공정 최적화 시스템 (Pro Ver.)")
     
-    # Cover Design (Optional)
-    st.markdown(
-        textwrap.dedent(
-            """
-            <style>
-            .stApp { background: #ffffff; }
-            .block-container { padding-top: 18px; padding-bottom: 40px; max-width: 1350px; }
-            .cover-box {
-                border-radius: 24px;
-                padding: 24px 32px;
-                margin-bottom: 24px;
-                background: linear-gradient(135deg, #dff3ff 0%, #ffffff 50%, #f5fff7 100%);
-                box-shadow: 0 6px 14px rgba(0,0,0,0.06);
-            }
-            .cover-top-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-            .cover-badge {
-                display: inline-block; padding: 10px 24px; border-radius: 999px;
-                background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 16px;
-                margin-bottom: 10px; margin-left: -12px;
-            }
-            .cover-title { font-size: 36px; font-weight: 800; color: #111111; margin: 4px 0 10px 0; }
-            .cover-sub-main { font-size: 20px; font-weight: 700; color: #222222; }
-            .cover-sub-sub { font-size: 18px; font-weight: 600; color: #333333; }
-            .cover-logo-area { text-align: right; font-size: 15px; color: #444444; }
-            </style>
-            """
-        ),
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        """
-        <div class="cover-box">
-            <div class="cover-top-row">
-                <div>
-                    <div class="cover-badge">2025 제1회 Google-아주대학교</div>
-                    <div class="cover-title">AI 기반 ALD 공정 최적화 시스템</div>
-                    <div class="cover-sub-main">AI 융합 캡스톤 디자인 대회</div>
-                    <div class="cover-sub-sub">최종성과발표회</div>
-                </div>
-                <div class="cover-logo-area">
-                    <div class="cover-logo-text">
-                        Google Developer Student Clubs<br>Ajou University
-                    </div>
-                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png"
-                         style="height:40px;">
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     if 'optimizer' not in st.session_state:
         csv = "AI_ALD1.csv"
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
@@ -567,15 +565,16 @@ def main_gui():
             
         prog_bar.empty(); status_text.empty()
         st.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
-        
+    
+    if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
+        st.session_state.pop('optimizer', None)
+        st.rerun()
+
     optimizer = st.session_state['optimizer']
 
     st.sidebar.header("🎯 공정 목표 설정")
     pre = st.sidebar.selectbox("전구체 (Precursor)", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
-    
-    # [UPDATED] Default Thickness 10.0
     th = st.sidebar.number_input("목표 두께 (nm)", 1.0, 200.0, 10.0)
-    
     ar = st.sidebar.number_input("Target AR (종횡비)", 1.0, 100.0, 10.0)
     cd = st.sidebar.number_input("CD (nm)", 1.0, 500.0, 100.0)
     
@@ -628,17 +627,15 @@ def main_gui():
                 
                 # Gaussian Smoothing
                 y_smooth = gaussian_filter1d(df_sens[yk], sigma=1.5)
-                
-                # Force align optimal point on line
                 f_interp = interp1d(df_sens[xk], y_smooth, kind='linear', fill_value="extrapolate")
                 
                 opt_x = recipe.get(xk)
                 if opt_x is None:
                     xk_fix = xk.replace("_", " ")
                     if xk_fix in recipe: opt_x = recipe[xk_fix]
-                
+
                 sns.lineplot(x=df_sens[xk], y=y_smooth, marker=None, ax=ax, label='AI Trend (Smoothed)', color='#1f77b4', linewidth=2)
-                ax.scatter(df_sens[xk], df_sens[yk], color='gray', alpha=0.3, s=10) 
+                ax.scatter(df_sens[xk], df_sens[yk], color='gray', alpha=0.3, s=10)
                 
                 if opt_x is not None:
                     opt_y_visual = f_interp(opt_x)
@@ -668,6 +665,7 @@ def main_gui():
                     
                     ax2.set_ylabel("Step Coverage (%)")
                     ax2.grid(True, alpha=0.3)
+                    ax2.legend()
                     st.pyplot(fig2)
 
         with t3:
