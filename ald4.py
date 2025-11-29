@@ -2,8 +2,8 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Layout Fix: Padding Adjusted]
-# 1. CSS Fix: padding-top 0px -> 2rem (Prevents banner text from being cut off).
+# [Final UI Fix: Padding Adjusted]
+# 1. CSS Fix: padding-top 0px -> 50px (Ensures the banner is fully visible).
 # 2. Header Clean: Hid default Streamlit header/menu for a cleaner look.
 # 3. Logic Preserved: All Speed/Physics/Accuracy fixes are included.
 # ==============================================================================
@@ -282,19 +282,19 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_fast_ensemble(self):
-        # 1. XGBoost
+        # 1. XGBoost (Light)
         self._update_progress(0.2, "XGBoost 학습 중... (1/3)")
         xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest
+        # 2. Random Forest (Light)
         self._update_progress(0.4, "Random Forest 학습 중... (2/3)")
         rf_model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP
+        # 3. PyTorch MLP (Light)
         self._update_progress(0.6, "Deep Learning (MLP) 학습 중... (3/3)")
         self._train_pytorch_mlp()
         
@@ -312,7 +312,7 @@ class ALDOptimizer:
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
-        optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-5)
+        optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
         
         loss_weights = torch.ones(self.output_dim).to(self.device)
@@ -332,29 +332,19 @@ class ALDOptimizer:
                 pred = self.models['mlp'](bx)
                 loss = torch.mean(loss_weights * (pred - by) ** 2)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.models['mlp'].parameters(), max_norm=1.0)
                 optimizer.step()
-            
-            self.models['mlp'].eval()
-            with torch.no_grad():
-                val_x = torch.FloatTensor(self.X_val_sc).to(self.device)
-                val_y = torch.FloatTensor(self.Y_val_sc).to(self.device)
-                val_pred = self.models['mlp'](val_x)
-                val_loss = torch.mean(loss_weights * (val_pred - val_y) ** 2).item()
-            
-            scheduler.step(val_loss)
             
             if epoch % 20 == 0:
                 progress = 0.6 + (0.3 * (epoch / self.epochs))
-                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {val_loss:.5f})")
+                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
 
-            if val_loss < best_loss:
-                best_loss = val_loss
+            if loss.item() < best_loss:
+                best_loss = loss.item()
                 patience_counter = 0
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if patience_counter >= 15:
+                if patience_counter >= 15: # Fast Early Stopping
                     break
         
         if os.path.exists(self.best_model_path):
@@ -446,7 +436,7 @@ class ALDOptimizer:
         ar = user_input["Target AR"]
         cd_m = user_input["CD (nm)"] * 1e-9
         
-        # Massive Batch Search (Vectorized)
+        # Massive Batch Search
         N = 50000
         temps = np.random.uniform(150, 400, N)
         press = np.random.uniform(0.01, 1.0, N)
@@ -555,11 +545,13 @@ class ALDOptimizer:
         for v in values:
             row = base_row.copy()
             if x_col in row: row[x_col] = v
-            elif x_col.replace(" ", "_") in row: row[x_col.replace(" ", "_")] = v
-            elif x_col.replace("_", " ") in row: row[x_col.replace("_", " ")] = v
-            elif "_Pulse Time" in x_col: 
-                row["Precursor_Pulse Time (s)"] = v
-                row["Co-reactant_Pulse Time (s)"] = v
+            else:
+                x_col_alt = x_col.replace(" ", "_")
+                if x_col_alt in row: row[x_col_alt] = v
+            
+            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
+                 row["Precursor_Pulse Time (s)"] = v
+                 row["Co-reactant_Pulse Time (s)"] = v
 
             batch_data.append(row)
             
@@ -598,19 +590,18 @@ class ALDOptimizer:
 
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
-
-    # ===================== Cover Design (Header) =====================
+    
+    # Cover Design
     st.markdown(
         textwrap.dedent(
             """
             <style>
             .stApp { background: #ffffff; }
-            .block-container { padding-top: 0px !important; padding-bottom: 40px; max-width: 1350px; }
+            .block-container { padding-top: 40px !important; padding-bottom: 40px; max-width: 1350px; }
             .cover-box {
                 border-radius: 24px;
                 padding: 24px 32px;
                 margin-bottom: 24px;
-                margin-top: 10px;
                 background: linear-gradient(135deg, #dff3ff 0%, #ffffff 50%, #f5fff7 100%);
                 box-shadow: 0 6px 14px rgba(0,0,0,0.06);
             }
@@ -625,6 +616,8 @@ def main_gui():
             .cover-sub-sub { font-size: 18px; font-weight: 600; color: #333333; }
             .cover-logo-area { text-align: right; font-size: 15px; color: #444444; }
             .cover-logo-text { line-height: 1.3; margin-bottom: 6px; }
+            /* Hide Streamlit Default Header */
+            header {visibility: hidden;}
             </style>
             """
         ),
@@ -653,7 +646,6 @@ def main_gui():
         """,
         unsafe_allow_html=True,
     )
-    # ===================== 표지 끝 =====================
     
     if 'optimizer' not in st.session_state:
         csv = "AI_ALD1.csv"
@@ -692,7 +684,7 @@ def main_gui():
     
     if st.sidebar.button("🚀 최적 레시피 도출"):
         user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        with st.spinner("AI가 최적 조건을 탐색 중입니다... (Batch Processing)"):
+        with st.spinner("AI가 최적 조건을 탐색 중입니다..."):
             recipe, pred, phy, res = optimizer.optimize(user_input)
             st.session_state.res = (recipe, pred, phy, res, user_input)
             
