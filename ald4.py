@@ -2,10 +2,12 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final UI Fix: Padding Adjusted]
-# 1. CSS Fix: padding-top 0px -> 50px (Ensures the banner is fully visible).
-# 2. Header Clean: Hid default Streamlit header/menu for a cleaner look.
-# 3. Logic Preserved: All Speed/Physics/Accuracy fixes are included.
+# [Final Speed & Balance Fix]
+# 1. CRITICAL FIX: Removed 'PolynomialFeatures' usage in dataset preparation.
+#    -> This removes the hidden computational bottleneck for Deep Learning.
+# 2. Time Sync:
+#    - XGB (2000 trees) / RF (1000 trees) -> Heavy load to prevent "1-sec cut".
+#    - MLP (300 epochs, No Poly) -> Optimized to match Tree model duration (~3s).
 # ==============================================================================
 
 import streamlit as st
@@ -31,7 +33,6 @@ from sklearn.model_selection import train_test_split
 from scipy.optimize import minimize
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.neural_network import MLPRegressor 
 from sklearn.multioutput import MultiOutputRegressor
 import xgboost as xgb
 import shap
@@ -70,28 +71,24 @@ COST_WEIGHTS = {
 }
 
 # ------------------------------------------------------------------------------
-# 2. Deep Learning Model Definition
+# 2. Deep Learning Model Definition (Lightweight Structure)
 # ------------------------------------------------------------------------------
 
 class ALDRegressor(nn.Module):
     def __init__(self, input_size, output_size):
         super(ALDRegressor, self).__init__()
+        # Light structure since we removed Polynomial Features (Input is small)
         self.layer_stack = nn.Sequential(
-            nn.Linear(input_size, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(128, 64),
+            nn.Linear(input_size, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.Dropout(0.1),
             
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
             
-            nn.Linear(64, output_size)
+            nn.Linear(32, output_size)
         )
         self._init_weights()
 
@@ -116,16 +113,20 @@ class ALDOptimizer:
         self.progress_callback = progress_callback
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # [Balanced Speed Settings]
         self.learning_rate = 0.005 
         self.batch_size = 64
-        self.epochs = 300
+        self.epochs = 300           # 300 epochs without poly features is FAST (~3s)
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
         self.models = {'mlp': None, 'xgboost': None, 'rf': None}
         self.model_weights = {'mlp': 0.33, 'xgboost': 0.33, 'rf': 0.33}
         
+        # Poly feature object is kept for Shap compat but NOT used for training data expansion
         self.poly = PolynomialFeatures(degree=2, include_bias=False, interaction_only=False)
+        
         self.X_scaler = MinMaxScaler()
         self.Y_scaler = MinMaxScaler()
         self.X_imputer = KNNImputer(n_neighbors=5)
@@ -139,8 +140,8 @@ class ALDOptimizer:
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
         
-        self._update_progress(0.2, "앙상블 모델 학습 시작...")
-        self.performance_df = self._train_fast_ensemble()
+        self._update_progress(0.1, "하이브리드 앙상블 모델 학습 시작...")
+        self.performance_df = self._train_ensemble_models()
         self._update_progress(1.0, "학습 완료! 시스템 준비됨.")
 
     def _update_progress(self, value, text):
@@ -208,19 +209,18 @@ class ALDOptimizer:
         X_combined = np.vstack([X_imp, X_phys])
         Y_combined = np.vstack([Y_imp, Y_phys])
         
-        # Data Augmentation
+        # Augmentation
         X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=5)
         
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        self.X_poly_train = self.poly.fit_transform(self.X_train)
-        self.X_poly_val = self.poly.transform(self.X_val)
-        self.X_poly_test = self.poly.transform(self.X_test)
+        # [CRITICAL FIX] Remove Polynomial Features from Training Data for Speed
+        # self.X_poly_train = self.poly.fit_transform(self.X_train)  <-- Removed this bottleneck
         
-        self.X_train_sc = self.X_scaler.fit_transform(self.X_poly_train)
-        self.X_val_sc = self.X_scaler.transform(self.X_poly_val)
-        self.X_test_sc = self.X_scaler.transform(self.X_poly_test)
+        self.X_train_sc = self.X_scaler.fit_transform(self.X_train) # Scale raw data
+        self.X_val_sc = self.X_scaler.transform(self.X_val)
+        self.X_test_sc = self.X_scaler.transform(self.X_test)
         
         self.Y_train_sc = self.Y_scaler.fit_transform(self.Y_train)
         self.Y_val_sc = self.Y_scaler.transform(self.Y_val)
@@ -281,25 +281,24 @@ class ALDOptimizer:
             Y_aug.append(Y)
         return np.vstack(X_aug), np.vstack(Y_aug)
 
-    def _train_fast_ensemble(self):
-        # 1. XGBoost (Light)
-        self._update_progress(0.2, "XGBoost 학습 중... (1/3)")
-        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5, n_jobs=-1)
+    def _train_ensemble_models(self):
+        # 1. XGBoost (Heavy Load - ~3s)
+        self._update_progress(0.15, "XGBoost (2000 Trees) 학습 중... (1/3)")
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=2000, learning_rate=0.01, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (Light)
-        self._update_progress(0.4, "Random Forest 학습 중... (2/3)")
-        rf_model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+        # 2. Random Forest (Heavy Load - ~3s)
+        self._update_progress(0.45, "Random Forest (1000 Trees) 학습 중... (2/3)")
+        rf_model = RandomForestRegressor(n_estimators=1000, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (Light)
-        self._update_progress(0.6, "Deep Learning (MLP) 학습 중... (3/3)")
+        # 3. PyTorch MLP (Optimized Fast - ~3s)
+        self._update_progress(0.75, "Deep Learning (PyTorch MLP) 학습 시작... (3/3)")
         self._train_pytorch_mlp()
         
-        # 4. Weight Optimization
-        self._update_progress(0.9, "모델 가중치 최적화 중...")
+        self._update_progress(0.95, "모델 가중치 최적화 중...")
         self._optimize_weights()
         
         return self._evaluate_ensemble()
@@ -332,19 +331,30 @@ class ALDOptimizer:
                 pred = self.models['mlp'](bx)
                 loss = torch.mean(loss_weights * (pred - by) ** 2)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.models['mlp'].parameters(), max_norm=1.0)
                 optimizer.step()
             
+            # Validation every epoch
+            self.models['mlp'].eval()
+            with torch.no_grad():
+                val_x = torch.FloatTensor(self.X_val_sc).to(self.device)
+                val_y = torch.FloatTensor(self.Y_val_sc).to(self.device)
+                val_pred = self.models['mlp'](val_x)
+                val_loss = torch.mean(loss_weights * (val_pred - val_y) ** 2).item()
+            
+            scheduler.step(val_loss)
+            
             if epoch % 20 == 0:
-                progress = 0.6 + (0.3 * (epoch / self.epochs))
-                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
+                progress = 0.75 + (0.20 * (epoch / self.epochs))
+                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {val_loss:.5f})")
 
-            if loss.item() < best_loss:
-                best_loss = loss.item()
+            if val_loss < best_loss:
+                best_loss = val_loss
                 patience_counter = 0
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if patience_counter >= 15: # Fast Early Stopping
+                if patience_counter >= 15: # Early Stopping
                     break
         
         if os.path.exists(self.best_model_path):
@@ -424,8 +434,8 @@ class ALDOptimizer:
         return float(np.clip(sc * 100, 0, 100)), lambda_m, Kn, phi, mode
 
     def _predict_batch(self, df_input):
-        X_poly = self.poly.transform(df_input.values)
-        X_sc = self.X_scaler.transform(X_poly)
+        # Using Scaler directly (No Poly)
+        X_sc = self.X_scaler.transform(df_input.values)
         Y_sc = self._predict_ensemble(X_sc)
         Y_real = self.Y_scaler.inverse_transform(Y_sc)
         return pd.DataFrame(Y_real, columns=self.all_output_cols)
@@ -513,6 +523,7 @@ class ALDOptimizer:
         return opt_recipe, final_pred_series, phy_info, res
 
     def analyze_sensitivity(self, recipe, user_input, x_col, y_col):
+        # Normalize Key Matching
         norm_recipe = {k.replace(" ", "_"): v for k, v in recipe.items()}
         norm_recipe.update(recipe)
         
@@ -582,7 +593,7 @@ class ALDOptimizer:
         model = self.models['xgboost'].estimators_[sc_idx]
         explainer = shap.TreeExplainer(model)
         shap_vals = explainer.shap_values(self.X_test_sc)
-        return explainer, shap_vals, self.X_test_sc, self.poly.get_feature_names_out(self.all_input_cols)
+        return explainer, shap_vals, self.X_test_sc, self.all_input_cols
 
 # ------------------------------------------------------------------------------
 # 4. Streamlit GUI
@@ -591,13 +602,13 @@ class ALDOptimizer:
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # Cover Design
+    # Cover Design (No Title)
     st.markdown(
         textwrap.dedent(
             """
             <style>
             .stApp { background: #ffffff; }
-            .block-container { padding-top: 40px !important; padding-bottom: 40px; max-width: 1350px; }
+            .block-container { padding-top: 2rem !important; padding-bottom: 40px; max-width: 1350px; }
             .cover-box {
                 border-radius: 24px;
                 padding: 24px 32px;
