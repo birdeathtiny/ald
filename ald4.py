@@ -2,12 +2,12 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Ultra-Fast Version]
-# 1. Speed Maximized: All models tuned to finish in ~1 second (User Request).
-#    - XGB/RF: 100 estimators.
-#    - MLP: 150 epochs, Batch 128.
-# 2. UI Fixed: Increased top padding (60px) to prevent banner cutoff.
-# 3. Physics/Graph Logic: Fully preserved for accurate visualization.
+# [Final "Just Right" Speed Patch]
+# 1. Tuned for ~3-5 seconds training time (Not too fast, not too slow).
+#    - XGB: 200 trees (MultiOutput x8)
+#    - RF: 300 trees
+#    - MLP: 250 epochs, Batch 64 (Slightly heavier load)
+# 2. All Layout/Physics fixes included.
 # ==============================================================================
 
 import streamlit as st
@@ -79,10 +79,14 @@ class ALDRegressor(nn.Module):
     def __init__(self, input_size, output_size):
         super(ALDRegressor, self).__init__()
         self.layer_stack = nn.Sequential(
-            nn.Linear(input_size, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(input_size, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.1),
+            
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
             
             nn.Linear(64, 32),
             nn.BatchNorm1d(32),
@@ -114,10 +118,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [Maximum Speed Settings]
-        self.learning_rate = 0.01 
-        self.batch_size = 128       # Large batch for speed
-        self.epochs = 150           # Fast epochs
+        # [Just Right Speed Settings]
+        self.learning_rate = 0.005 
+        self.batch_size = 64        # Smaller batch = More updates = Slightly slower
+        self.epochs = 250           # Increased from 150 -> 250
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -138,7 +142,7 @@ class ALDOptimizer:
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
         
-        self._update_progress(0.1, "초고속 앙상블 모델 학습 시작...")
+        self._update_progress(0.1, "하이브리드 앙상블 모델 학습 시작...")
         self.performance_df = self._train_ensemble_models()
         self._update_progress(1.0, "학습 완료! 시스템 준비됨.")
 
@@ -207,13 +211,13 @@ class ALDOptimizer:
         X_combined = np.vstack([X_imp, X_phys])
         Y_combined = np.vstack([Y_imp, Y_phys])
         
-        # Augmentation (2x) - Fast
+        # Augmentation (2x)
         X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=2)
         
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        # No Poly
+        # No Poly (For Speed/Stability)
         self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
         self.X_val_sc = self.X_scaler.transform(self.X_val)
         self.X_test_sc = self.X_scaler.transform(self.X_test)
@@ -278,20 +282,20 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (Fast - 100 trees)
-        self._update_progress(0.2, "XGBoost 학습 중... (1/3)")
-        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5, n_jobs=-1)
+        # 1. XGBoost (Tuned: 200 trees)
+        self._update_progress(0.15, "XGBoost 학습 중... (1/3)")
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=200, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (Fast - 100 trees)
-        self._update_progress(0.4, "Random Forest 학습 중... (2/3)")
-        rf_model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        # 2. Random Forest (Tuned: 300 trees)
+        self._update_progress(0.45, "Random Forest 학습 중... (2/3)")
+        rf_model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (Fast - 150 epochs)
-        self._update_progress(0.6, "Deep Learning 학습 중... (3/3)")
+        # 3. PyTorch MLP (Tuned: 250 epochs, batch 64)
+        self._update_progress(0.75, "Deep Learning (PyTorch MLP) 학습 시작... (3/3)")
         self._train_pytorch_mlp()
         
         self._update_progress(0.95, "모델 가중치 최적화 중...")
@@ -327,19 +331,29 @@ class ALDOptimizer:
                 pred = self.models['mlp'](bx)
                 loss = torch.mean(loss_weights * (pred - by) ** 2)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.models['mlp'].parameters(), max_norm=1.0)
                 optimizer.step()
             
+            self.models['mlp'].eval()
+            with torch.no_grad():
+                val_x = torch.FloatTensor(self.X_val_sc).to(self.device)
+                val_y = torch.FloatTensor(self.Y_val_sc).to(self.device)
+                val_pred = self.models['mlp'](val_x)
+                val_loss = torch.mean(loss_weights * (val_pred - val_y) ** 2).item()
+            
+            scheduler.step(val_loss)
+            
             if epoch % 20 == 0:
-                progress = 0.6 + (0.3 * (epoch / self.epochs))
-                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
+                progress = 0.75 + (0.20 * (epoch / self.epochs))
+                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {val_loss:.5f})")
 
-            if loss.item() < best_loss:
-                best_loss = loss.item()
+            if val_loss < best_loss:
+                best_loss = val_loss
                 patience_counter = 0
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if patience_counter >= 10: # Fast Early Stop
+                if patience_counter >= 20:
                     break
         
         if os.path.exists(self.best_model_path):
@@ -419,6 +433,7 @@ class ALDOptimizer:
         return float(np.clip(sc * 100, 0, 100)), lambda_m, Kn, phi, mode
 
     def _predict_batch(self, df_input):
+        # No Poly
         X_sc = self.X_scaler.transform(df_input.values)
         Y_sc = self._predict_ensemble(X_sc)
         Y_real = self.Y_scaler.inverse_transform(Y_sc)
@@ -507,6 +522,7 @@ class ALDOptimizer:
         return opt_recipe, final_pred_series, phy_info, res
 
     def analyze_sensitivity(self, recipe, user_input, x_col, y_col):
+        # Key Normalization
         norm_recipe = {k.replace(" ", "_"): v for k, v in recipe.items()}
         norm_recipe.update(recipe)
         
@@ -516,7 +532,7 @@ class ALDOptimizer:
         
         if target_val is None: return pd.DataFrame()
             
-        # [VISUAL FIX] Wide Sweep for S-Curve visibility
+        # Wide Sweep
         if "Pulse Time" in x_col:
             values = np.linspace(0.01, target_val * 1.5, 50)
         else:
@@ -542,12 +558,14 @@ class ALDOptimizer:
         for v in values:
             row = base_row.copy()
             if x_col in row: row[x_col] = v
-            elif x_col.replace(" ", "_") in row: row[x_col.replace(" ", "_")] = v
-            elif x_col.replace("_", " ") in row: row[x_col.replace("_", " ")] = v
-            elif "_Pulse Time" in x_col: 
-                row["Precursor_Pulse Time (s)"] = v
-                row["Co-reactant_Pulse Time (s)"] = v
+            else:
+                x_col_alt = x_col.replace(" ", "_")
+                if x_col_alt in row: row[x_col_alt] = v
             
+            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
+                 row["Precursor_Pulse Time (s)"] = v
+                 row["Co-reactant_Pulse Time (s)"] = v
+
             batch_data.append(row)
             
         df_batch = pd.DataFrame(batch_data)
@@ -586,7 +604,6 @@ class ALDOptimizer:
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # Cover Design (With 60px Top Padding)
     st.markdown(
         textwrap.dedent(
             """
@@ -597,6 +614,7 @@ def main_gui():
                 border-radius: 24px;
                 padding: 24px 32px;
                 margin-bottom: 24px;
+                margin-top: 10px;
                 background: linear-gradient(135deg, #dff3ff 0%, #ffffff 50%, #f5fff7 100%);
                 box-shadow: 0 6px 14px rgba(0,0,0,0.06);
             }
@@ -611,7 +629,6 @@ def main_gui():
             .cover-sub-sub { font-size: 18px; font-weight: 600; color: #333333; }
             .cover-logo-area { text-align: right; font-size: 15px; color: #444444; }
             .cover-logo-text { line-height: 1.3; margin-bottom: 6px; }
-            /* Hide Header */
             header {visibility: hidden;}
             </style>
             """
@@ -679,7 +696,7 @@ def main_gui():
     
     if st.sidebar.button("🚀 최적 레시피 도출"):
         user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        with st.spinner("AI가 최적 조건을 탐색 중입니다... (Batch Processing)"):
+        with st.spinner("AI가 최적 조건을 탐색 중입니다..."):
             recipe, pred, phy, res = optimizer.optimize(user_input)
             st.session_state.res = (recipe, pred, phy, res, user_input)
             
