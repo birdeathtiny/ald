@@ -2,11 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version: Logical Calibration]
-# 1. XGBoost: 175 trees (The exact midpoint between "150 Fast" and "200 Slow").
-# 2. Random Forest: 700 trees (Calculated balance between "300 Fast" and "1000 Slow").
-# 3. Deep Learning: 150 epochs (Fixed as per instruction).
-# 4. System: Multi-core enabled, Physics-Informed, all Graph fixes included.
+# [Final Mobile-Friendly UI Patch]
+# 1. Layout Change: Moved "Process Settings" from Sidebar to Main Area (Expander).
+#    -> Solves the issue of hidden controls on mobile devices.
+# 2. Button Fix: Made the "Run" button full-width for better mobile UX.
+# 3. Logic/Params: Maintained all previous optimized settings (XGB 150/RF 500/DL 150).
 # ==============================================================================
 
 import streamlit as st
@@ -114,10 +114,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [LOGICAL CALIBRATION]
+        # [Fixed User Settings]
         self.learning_rate = 0.01 
         self.batch_size = 64
-        self.epochs = 150           # DL: Fixed
+        self.epochs = 150           # Fixed: 150
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -213,7 +213,7 @@ class ALDOptimizer:
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        # No Poly
+        # No Poly for speed
         self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
         self.X_val_sc = self.X_scaler.transform(self.X_val)
         self.X_test_sc = self.X_scaler.transform(self.X_test)
@@ -278,15 +278,15 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (175 Trees - Midpoint)
-        self._update_progress(0.15, "XGBoost (175 Trees) 학습 중... (1/3)")
-        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
+        # 1. XGBoost (150 Trees - Fixed)
+        self._update_progress(0.15, "XGBoost (150 Trees) 학습 중... (1/3)")
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=150, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (700 Trees - Calibrated Speed)
-        self._update_progress(0.45, "Random Forest (700 Trees) 학습 중... (2/3)")
-        rf_model = RandomForestRegressor(n_estimators=700, max_depth=None, random_state=42, n_jobs=-1)
+        # 2. Random Forest (500 Trees - Reduced)
+        self._update_progress(0.45, "Random Forest (500 Trees) 학습 중... (2/3)")
+        rf_model = RandomForestRegressor(n_estimators=500, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
@@ -515,7 +515,7 @@ class ALDOptimizer:
         
         if target_val is None: return pd.DataFrame()
             
-        # Wide Sweep for S-Curve
+        # Wide Sweep
         if "Pulse Time" in x_col:
             values = np.linspace(0.01, target_val * 1.5, 50)
         else:
@@ -533,6 +533,7 @@ class ALDOptimizer:
             k_us = k.replace(" ", "_")
             if k in base_row: base_row[k] = v
             elif k_us in base_row: base_row[k_us] = v
+            
             if "Pulse Time" in k:
                  k_special = k.replace("Pulse Time", "_Pulse Time")
                  if k_special in base_row: base_row[k_special] = v
@@ -584,6 +585,7 @@ class ALDOptimizer:
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
+    # Cover Design (Fixed Layout)
     st.markdown(
         textwrap.dedent(
             """
@@ -662,25 +664,30 @@ def main_gui():
         prog_bar.empty(); status_text.empty()
         st.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
     
+    # [Mobile-Friendly UI Update] Move Process Settings to Main Expander
+    with st.expander("🎯 공정 목표 설정 (펼치기/접기)", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            pre = st.selectbox("전구체 (Precursor)", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
+            th = st.number_input("목표 두께 (nm)", 1.0, 200.0, 10.0)
+        with c2:
+            ar = st.number_input("Target AR (종횡비)", 1.0, 100.0, 10.0)
+            cd = st.number_input("CD (nm)", 1.0, 500.0, 100.0)
+            
+        if st.button("🚀 최적 레시피 도출", use_container_width=True):
+            user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
+            optimizer = st.session_state['optimizer']
+            with st.spinner("AI가 최적 조건을 탐색 중입니다..."):
+                recipe, pred, phy, res = optimizer.optimize(user_input)
+                st.session_state.res = (recipe, pred, phy, res, user_input)
+
+    # Sidebar only for Reset
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
         st.session_state.pop('optimizer', None)
         st.rerun()
 
-    optimizer = st.session_state['optimizer']
-
-    st.sidebar.header("🎯 공정 목표 설정")
-    pre = st.sidebar.selectbox("전구체 (Precursor)", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
-    th = st.sidebar.number_input("목표 두께 (nm)", 1.0, 200.0, 10.0)
-    ar = st.sidebar.number_input("Target AR (종횡비)", 1.0, 100.0, 10.0)
-    cd = st.sidebar.number_input("CD (nm)", 1.0, 500.0, 100.0)
-    
-    if st.sidebar.button("🚀 최적 레시피 도출"):
-        user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
-        with st.spinner("AI가 최적 조건을 탐색 중입니다..."):
-            recipe, pred, phy, res = optimizer.optimize(user_input)
-            st.session_state.res = (recipe, pred, phy, res, user_input)
-            
     if 'res' in st.session_state:
+        optimizer = st.session_state['optimizer']
         recipe, pred, phy, res, u_in = st.session_state.res
         
         t1, t2, t3 = st.tabs(["📄 최적 레시피 리포트", "📊 공정 민감도 분석", "🔍 XAI 해석"])
