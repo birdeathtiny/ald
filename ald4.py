@@ -2,11 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Mobile-Friendly UI Patch]
-# 1. Layout Change: Moved "Process Settings" from Sidebar to Main Area (Expander).
-#    -> Solves the issue of hidden controls on mobile devices.
-# 2. Button Fix: Made the "Run" button full-width for better mobile UX.
-# 3. Logic/Params: Maintained all previous optimized settings (XGB 150/RF 500/DL 150).
+# [Final Locked Version: User-Defined Optimum]
+# 1. XGBoost: 175 trees (Fixed: Midpoint between fast/slow).
+# 2. Random Forest: 700 trees (Fixed: Midpoint between fast/slow).
+# 3. Deep Learning: 150 epochs (Fixed: As requested).
+# 4. All Previous Fixes Included: UI Design, Physics Logic, Graph Smoothing.
 # ==============================================================================
 
 import streamlit as st
@@ -114,10 +114,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [Fixed User Settings]
+        # [Confirmed User Settings]
         self.learning_rate = 0.01 
         self.batch_size = 64
-        self.epochs = 150           # Fixed: 150
+        self.epochs = 150           # DL: 150
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -207,13 +207,13 @@ class ALDOptimizer:
         X_combined = np.vstack([X_imp, X_phys])
         Y_combined = np.vstack([Y_imp, Y_phys])
         
-        # Augmentation
+        # Augmentation (5x)
         X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=5)
         
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        # No Poly for speed
+        # No Poly
         self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
         self.X_val_sc = self.X_scaler.transform(self.X_val)
         self.X_test_sc = self.X_scaler.transform(self.X_test)
@@ -278,19 +278,19 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (150 Trees - Fixed)
-        self._update_progress(0.15, "XGBoost (150 Trees) 학습 중... (1/3)")
-        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=150, learning_rate=0.05, max_depth=6, n_jobs=-1)
+        # 1. XGBoost (175 Trees - Confirmed)
+        self._update_progress(0.15, "XGBoost 학습 중... (1/3)")
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (500 Trees - Reduced)
-        self._update_progress(0.45, "Random Forest (500 Trees) 학습 중... (2/3)")
-        rf_model = RandomForestRegressor(n_estimators=500, max_depth=None, random_state=42, n_jobs=-1)
+        # 2. Random Forest (700 Trees - Confirmed)
+        self._update_progress(0.45, "Random Forest 학습 중... (2/3)")
+        rf_model = RandomForestRegressor(n_estimators=700, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (150 Epochs - Fixed)
+        # 3. PyTorch MLP (150 Epochs - Confirmed)
         self._update_progress(0.75, "Deep Learning (PyTorch MLP) 학습 시작... (3/3)")
         self._train_pytorch_mlp()
         
@@ -308,6 +308,7 @@ class ALDOptimizer:
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
         optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
         
         loss_weights = torch.ones(self.output_dim).to(self.device)
         try:
@@ -533,7 +534,6 @@ class ALDOptimizer:
             k_us = k.replace(" ", "_")
             if k in base_row: base_row[k] = v
             elif k_us in base_row: base_row[k_us] = v
-            
             if "Pulse Time" in k:
                  k_special = k.replace("Pulse Time", "_Pulse Time")
                  if k_special in base_row: base_row[k_special] = v
@@ -583,9 +583,18 @@ class ALDOptimizer:
 # ------------------------------------------------------------------------------
 
 def main_gui():
+    # [Cache Logic]
+    @st.cache_resource
+    def get_trained_optimizer():
+        csv = "AI_ALD1.csv"
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
+        if not os.path.exists(path): path = csv
+        if not os.path.exists(path): return None
+        return ALDOptimizer(path, mode="gui", progress_callback=None)
+
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # Cover Design (Fixed Layout)
+    # Cover Design
     st.markdown(
         textwrap.dedent(
             """
@@ -642,29 +651,15 @@ def main_gui():
     )
     
     if 'optimizer' not in st.session_state:
-        csv = "AI_ALD1.csv"
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
-        if not os.path.exists(path): path = csv
-        if not os.path.exists(path):
-            st.error(f"❌ 데이터 파일 '{csv}'을(를) 찾을 수 없습니다."); st.stop()
-
-        prog_bar = st.progress(0)
-        status_text = st.empty()
-        
-        def update_progress(val, text):
-            prog_bar.progress(val)
-            status_text.text(text)
-
-        try:
-            opt_instance = ALDOptimizer(path, mode="gui", progress_callback=update_progress)
+        with st.spinner("AI 모델 초기화 및 학습 중... (최초 1회만 실행)"):
+            opt_instance = get_trained_optimizer()
+            if opt_instance is None:
+                st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
+                st.stop()
             st.session_state['optimizer'] = opt_instance
-        except Exception as e:
-            st.error(f"모델 학습 중 오류 발생: {e}"); st.stop()
-            
-        prog_bar.empty(); status_text.empty()
         st.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
     
-    # [Mobile-Friendly UI Update] Move Process Settings to Main Expander
+    # Main Expander for Inputs (Mobile Friendly)
     with st.expander("🎯 공정 목표 설정 (펼치기/접기)", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -681,8 +676,9 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Sidebar only for Reset
+    # Sidebar for Reset
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
+        st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
         st.rerun()
 
