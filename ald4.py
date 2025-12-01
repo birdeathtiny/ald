@@ -2,12 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final "Just Right" Speed Patch]
-# 1. Tuned for ~3-5 seconds training time (Not too fast, not too slow).
-#    - XGB: 200 trees (MultiOutput x8)
-#    - RF: 300 trees
-#    - MLP: 250 epochs, Batch 64 (Slightly heavier load)
-# 2. All Layout/Physics fixes included.
+# [Final Version: Logical Calibration]
+# 1. XGBoost: 175 trees (The exact midpoint between "150 Fast" and "200 Slow").
+# 2. Random Forest: 700 trees (Calculated balance between "300 Fast" and "1000 Slow").
+# 3. Deep Learning: 150 epochs (Fixed as per instruction).
+# 4. System: Multi-core enabled, Physics-Informed, all Graph fixes included.
 # ==============================================================================
 
 import streamlit as st
@@ -25,6 +24,7 @@ import matplotlib.ticker as ticker
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import interp1d
 import textwrap
+import time
 
 # 머신러닝 라이브러리
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, PolynomialFeatures
@@ -79,14 +79,10 @@ class ALDRegressor(nn.Module):
     def __init__(self, input_size, output_size):
         super(ALDRegressor, self).__init__()
         self.layer_stack = nn.Sequential(
-            nn.Linear(input_size, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(128, 64),
+            nn.Linear(input_size, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
+            nn.Dropout(0.1),
             
             nn.Linear(64, 32),
             nn.BatchNorm1d(32),
@@ -118,10 +114,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [Just Right Speed Settings]
-        self.learning_rate = 0.005 
-        self.batch_size = 64        # Smaller batch = More updates = Slightly slower
-        self.epochs = 250           # Increased from 150 -> 250
+        # [LOGICAL CALIBRATION]
+        self.learning_rate = 0.01 
+        self.batch_size = 64
+        self.epochs = 150           # DL: Fixed
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -211,13 +207,13 @@ class ALDOptimizer:
         X_combined = np.vstack([X_imp, X_phys])
         Y_combined = np.vstack([Y_imp, Y_phys])
         
-        # Augmentation (2x)
-        X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=2)
+        # Augmentation
+        X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=5)
         
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        # No Poly (For Speed/Stability)
+        # No Poly
         self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
         self.X_val_sc = self.X_scaler.transform(self.X_val)
         self.X_test_sc = self.X_scaler.transform(self.X_test)
@@ -273,7 +269,7 @@ class ALDOptimizer:
             
         return np.array(X_synth), np.array(Y_synth)
 
-    def _augment_data(self, X, Y, noise=0.01, multiplier=2):
+    def _augment_data(self, X, Y, noise=0.01, multiplier=5):
         X_aug, Y_aug = [X], [Y]
         for _ in range(multiplier):
             n = np.random.normal(0, noise, X.shape)
@@ -282,19 +278,19 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (Tuned: 200 trees)
-        self._update_progress(0.15, "XGBoost 학습 중... (1/3)")
-        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=200, learning_rate=0.05, max_depth=6, n_jobs=-1)
+        # 1. XGBoost (175 Trees - Midpoint)
+        self._update_progress(0.15, "XGBoost (175 Trees) 학습 중... (1/3)")
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (Tuned: 300 trees)
-        self._update_progress(0.45, "Random Forest 학습 중... (2/3)")
-        rf_model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42, n_jobs=-1)
+        # 2. Random Forest (700 Trees - Calibrated Speed)
+        self._update_progress(0.45, "Random Forest (700 Trees) 학습 중... (2/3)")
+        rf_model = RandomForestRegressor(n_estimators=700, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (Tuned: 250 epochs, batch 64)
+        # 3. PyTorch MLP (150 Epochs - Fixed)
         self._update_progress(0.75, "Deep Learning (PyTorch MLP) 학습 시작... (3/3)")
         self._train_pytorch_mlp()
         
@@ -312,7 +308,6 @@ class ALDOptimizer:
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
         optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
         
         loss_weights = torch.ones(self.output_dim).to(self.device)
         try:
@@ -331,29 +326,19 @@ class ALDOptimizer:
                 pred = self.models['mlp'](bx)
                 loss = torch.mean(loss_weights * (pred - by) ** 2)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.models['mlp'].parameters(), max_norm=1.0)
                 optimizer.step()
-            
-            self.models['mlp'].eval()
-            with torch.no_grad():
-                val_x = torch.FloatTensor(self.X_val_sc).to(self.device)
-                val_y = torch.FloatTensor(self.Y_val_sc).to(self.device)
-                val_pred = self.models['mlp'](val_x)
-                val_loss = torch.mean(loss_weights * (val_pred - val_y) ** 2).item()
-            
-            scheduler.step(val_loss)
             
             if epoch % 20 == 0:
                 progress = 0.75 + (0.20 * (epoch / self.epochs))
-                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {val_loss:.5f})")
+                self._update_progress(progress, f"Deep Learning 학습 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
 
-            if val_loss < best_loss:
-                best_loss = val_loss
+            if loss.item() < best_loss:
+                best_loss = loss.item()
                 patience_counter = 0
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if patience_counter >= 20:
+                if patience_counter >= 15: 
                     break
         
         if os.path.exists(self.best_model_path):
@@ -433,7 +418,6 @@ class ALDOptimizer:
         return float(np.clip(sc * 100, 0, 100)), lambda_m, Kn, phi, mode
 
     def _predict_batch(self, df_input):
-        # No Poly
         X_sc = self.X_scaler.transform(df_input.values)
         Y_sc = self._predict_ensemble(X_sc)
         Y_real = self.Y_scaler.inverse_transform(Y_sc)
@@ -522,7 +506,6 @@ class ALDOptimizer:
         return opt_recipe, final_pred_series, phy_info, res
 
     def analyze_sensitivity(self, recipe, user_input, x_col, y_col):
-        # Key Normalization
         norm_recipe = {k.replace(" ", "_"): v for k, v in recipe.items()}
         norm_recipe.update(recipe)
         
@@ -532,7 +515,7 @@ class ALDOptimizer:
         
         if target_val is None: return pd.DataFrame()
             
-        # Wide Sweep
+        # Wide Sweep for S-Curve
         if "Pulse Time" in x_col:
             values = np.linspace(0.01, target_val * 1.5, 50)
         else:
@@ -550,7 +533,6 @@ class ALDOptimizer:
             k_us = k.replace(" ", "_")
             if k in base_row: base_row[k] = v
             elif k_us in base_row: base_row[k_us] = v
-            
             if "Pulse Time" in k:
                  k_special = k.replace("Pulse Time", "_Pulse Time")
                  if k_special in base_row: base_row[k_special] = v
@@ -558,14 +540,12 @@ class ALDOptimizer:
         for v in values:
             row = base_row.copy()
             if x_col in row: row[x_col] = v
-            else:
-                x_col_alt = x_col.replace(" ", "_")
-                if x_col_alt in row: row[x_col_alt] = v
+            elif x_col.replace(" ", "_") in row: row[x_col.replace(" ", "_")] = v
+            elif x_col.replace("_", " ") in row: row[x_col.replace("_", " ")] = v
+            elif "_Pulse Time" in x_col: 
+                row["Precursor_Pulse Time (s)"] = v
+                row["Co-reactant_Pulse Time (s)"] = v
             
-            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
-                 row["Precursor_Pulse Time (s)"] = v
-                 row["Co-reactant_Pulse Time (s)"] = v
-
             batch_data.append(row)
             
         df_batch = pd.DataFrame(batch_data)
