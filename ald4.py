@@ -2,11 +2,14 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version v26: No Double Loading & Smaller Fonts]
-# 1. Double Loading Fix: Removed redundant cache call. Runs EXACTLY ONCE.
-# 2. Font Size: Reduced all font sizes (Title 28px, Sub 16px, etc.) for mobile.
-# 3. Parameters Locked: XGB(175), RF(130), MLP(100/256).
-# 4. Visibility: Forced White Theme & Black Text.
+# [Final Version v27: Speed, Visibility, and Logic Perfected]
+# 1. Speed: MLP Batch Size 256 (Full Batch) & Reduced Neurons -> Instant Training.
+# 2. Parameters: XGB(175), RF(130), MLP(100) -> STRICTLY LOCKED.
+# 3. UI: 
+#    - Forced White Theme & Black Text via extensive CSS.
+#    - Restored Original Gradient Design.
+#    - Colored Buttons (Orange/Green).
+# 4. Logic: Single-run persistence via st.session_state (No double loading).
 # ==============================================================================
 
 import streamlit as st
@@ -83,16 +86,15 @@ class ALDRegressor(nn.Module):
         super(ALDRegressor, self).__init__()
         # Lightweight Architecture for Speed
         self.layer_stack = nn.Sequential(
-            nn.Linear(input_size, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(64, 32),
+            nn.Linear(input_size, 32),  # Reduced for speed
             nn.BatchNorm1d(32),
             nn.ReLU(),
             
-            nn.Linear(32, output_size)
+            nn.Linear(32, 16),          # Reduced for speed
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            
+            nn.Linear(16, output_size)
         )
         self._init_weights()
 
@@ -135,7 +137,7 @@ class ALDOptimizer:
         self.all_input_cols = []
         self.all_output_cols = []
         
-        # UI Placeholders
+        # UI Placeholders (Internal handling)
         self.status_container = None
         self.progress_bar = None
         
@@ -154,7 +156,7 @@ class ALDOptimizer:
         self._update_ui(1.0, "학습 완료! 시스템 준비됨.")
         time.sleep(0.5)
         
-        # Clear UI elements
+        # Clear UI after loading
         if self.mode == 'gui':
             self.status_container.empty()
             self.progress_bar.empty()
@@ -163,7 +165,7 @@ class ALDOptimizer:
         if self.mode == "gui":
             self.progress_bar.progress(min(value, 1.0))
             # Force Visible Blue Text
-            self.status_container.markdown(f"<h4 style='color:blue; font-weight:bold; font-size:16px;'>🔄 {text}</h4>", unsafe_allow_html=True)
+            self.status_container.markdown(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>", unsafe_allow_html=True)
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -325,7 +327,6 @@ class ALDOptimizer:
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
         optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
         
         loss_weights = torch.ones(self.output_dim).to(self.device)
         try:
@@ -590,14 +591,13 @@ class ALDOptimizer:
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # [CSS Injection] Final Font Size Adjustment
+    # [CSS Injection] Force Text Visibility & Layout
     st.markdown(
         """
         <style>
-        /* Force White Background */
-        .stApp { background-color: #ffffff !important; }
+        .stApp { background: #ffffff; }
         
-        /* Force All Text Black */
+        /* Force ALL text to black */
         body, p, div, span, label, h1, h2, h3, h4, h5, h6, td, th, li {
             color: #000000 !important;
         }
@@ -615,7 +615,7 @@ def main_gui():
         }
         
         /* Expander Header */
-        .streamlit-expanderHeader {
+        div[data-testid="stExpander"] details summary {
             background-color: #f0f2f6 !important;
             color: #000000 !important;
             font-weight: bold !important;
@@ -643,7 +643,7 @@ def main_gui():
 
         .block-container { padding-top: 60px !important; padding-bottom: 40px; max-width: 1350px; }
         
-        /* Cover Box - Reduced Font Sizes */
+        /* Restored Original Cover Box Design */
         .cover-box {
             border-radius: 24px;
             padding: 24px 32px;
@@ -653,9 +653,9 @@ def main_gui():
             box-shadow: 0 6px 14px rgba(0,0,0,0.06);
         }
         .cover-badge {
-            display: inline-block; padding: 8px 20px; border-radius: 999px;
-            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 13px;
-            margin-bottom: 8px; margin-left: -12px;
+            display: inline-block; padding: 10px 24px; border-radius: 999px;
+            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 14px;
+            margin-bottom: 10px; margin-left: -12px;
         }
         header {visibility: hidden;}
         </style>
@@ -669,13 +669,13 @@ def main_gui():
             <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                 <div>
                     <div class="cover-badge">2025 제1회 Google-아주대학교</div>
-                    <div style="font-size: 28px; font-weight: 800; color: #111111; margin: 4px 0 10px 0;">AI 기반 ALD 공정 최적화 시스템</div>
-                    <div style="font-size: 16px; font-weight: 700; color: #222222;">AI 융합 캡스톤 디자인 대회</div>
-                    <div style="font-size: 14px; font-weight: 600; color: #333333;">최종성과발표회</div>
+                    <div style="font-size: 32px; font-weight: 800; color: #111111; margin: 4px 0 10px 0;">AI 기반 ALD 공정 최적화 시스템</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #222222;">AI 융합 캡스톤 디자인 대회</div>
+                    <div style="font-size: 16px; font-weight: 600; color: #333333;">최종성과발표회</div>
                 </div>
                 <div style="text-align: right;">
-                    <div style="line-height: 1.3; margin-bottom: 6px; font-size: 12px; color: #444444;">Google Developer Student Clubs<br>Ajou University</div>
-                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png" style="height:35px;">
+                    <div style="line-height: 1.3; margin-bottom: 6px; font-size: 13px; color: #444444;">Google Developer Student Clubs<br>Ajou University</div>
+                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png" style="height:40px;">
                 </div>
             </div>
         </div>
@@ -683,16 +683,22 @@ def main_gui():
         unsafe_allow_html=True,
     )
     
+    status_container = st.empty()
+    progress_container = st.empty()
+
     if 'optimizer' not in st.session_state:
-        # Manual instantiation for first run
+        # Manual instantiation for first run to show progress
         csv = "AI_ALD1.csv"
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         
         if os.path.exists(path):
+            # Direct call without cache to show progress
             opt = ALDOptimizer(path, mode="gui")
             st.session_state['optimizer'] = opt
-            # No redundant cache call
+            
+            progress_container.empty()
+            status_container.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
         else:
             st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
             st.stop()
@@ -709,7 +715,7 @@ def main_gui():
         if st.button("🚀 최적 레시피 도출", use_container_width=True):
             user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
             optimizer = st.session_state['optimizer']
-            # No Spinner - UI updates inside
+            # No spinner here either
             recipe, pred, phy, res = optimizer.optimize(user_input)
             st.session_state.res = (recipe, pred, phy, res, user_input)
 
@@ -806,7 +812,8 @@ def main_gui():
         with t3:
             st.markdown("### 🧠 Explainable AI (SHAP)")
             if st.button("SHAP 분석 시작"):
-                # Spinner removed as requested
+                # Spinner removed as requested, using internal progress if needed or just wait
+                # SHAP calculation is usually fast enough or just blocking
                 exp, vals, X_test, feats = optimizer.get_shap()
                 fig, ax = plt.subplots()
                 shap.summary_plot(vals, X_test, feature_names=feats, show=False)
