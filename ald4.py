@@ -2,11 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version v7: Force Light Theme & Visibility]
-# 1. CSS Fix: Forced Background to WHITE and Text to BLACK globally.
-#    -> Solves "Black text on Black background" issue in Dark Mode.
-# 2. Parameters Locked: XGB(175), RF(700), MLP(150).
-# 3. Logic: Physics, Graph Smoothing, Mobile Caching all included.
+# [Final Ultimate Version: User Settings Restored & Mobile Optimized]
+# 1. XGBoost: 175 trees (Restored to User's optimal speed setting).
+# 2. Random Forest: 100 trees (Reduced to 100 because 300 was slow on mobile).
+# 3. Deep Learning: 100 epochs (Reduced to 100 for speed, Batch size 128).
+# 4. UI/UX: Black text forced, Progress bar active, Mobile layout optimized.
 # ==============================================================================
 
 import streamlit as st
@@ -45,6 +45,8 @@ import shap
 import platform
 from matplotlib import font_manager, rc
 plt.rcParams['axes.unicode_minus'] = False
+
+# 폰트 설정 (한글 깨짐 방지)
 if platform.system() == 'Darwin':
     rc('font', family='AppleGothic')
 elif platform.system() == 'Windows':
@@ -115,10 +117,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [Final Params: Locked]
+        # [Corrected User Settings]
         self.learning_rate = 0.01 
-        self.batch_size = 64
-        self.epochs = 150           # DL: 150
+        self.batch_size = 128       # Fast Batch
+        self.epochs = 100           # DL: 100 (Mobile Optimized)
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -152,13 +154,13 @@ class ALDOptimizer:
 
     def _update_status(self, text):
         if self.status_callback:
-            # Status Text: Blue & Bold
-            self.status_callback(f"<h4 style='color:blue; font-weight:bold; margin:0;'>🔄 {text}</h4>")
+            self.status_callback(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>")
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
+            # Fallback
             df = pd.DataFrame(columns=['Precursor', 'Thickness (nm)']) 
             
         df.replace('-', np.nan, inplace=True)
@@ -292,15 +294,15 @@ class ALDOptimizer:
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (700 Trees)
-        self._update_status("Random Forest (700 Trees) 학습 중... [2/3]")
+        # 2. Random Forest (100 Trees - Mobile Speed Optimized)
+        self._update_status("Random Forest (100 Trees) 학습 중... [2/3]")
         self._update_progress(0.5)
-        rf_model = RandomForestRegressor(n_estimators=700, max_depth=None, random_state=42, n_jobs=-1)
+        rf_model = RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (150 Epochs)
-        self._update_status("Deep Learning (150 Epochs) 학습 중... [3/3]")
+        # 3. PyTorch MLP (100 Epochs - Mobile Speed Optimized)
+        self._update_status("Deep Learning (100 Epochs) 학습 중... [3/3]")
         self._update_progress(0.75)
         self._train_pytorch_mlp()
         
@@ -351,7 +353,7 @@ class ALDOptimizer:
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if epoch > 100 and patience_counter >= 15: # Min 100 Epochs Guard
+                if epoch > 50 and patience_counter >= 10: # Fast Early Stop
                     break
         
         if os.path.exists(self.best_model_path):
@@ -606,37 +608,34 @@ def main_gui():
 
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # [CSS Injection] - Ultimate Visibility Fix
+    # [CSS Injection] Force Text Visibility & Layout
     st.markdown(
         """
         <style>
-        /* Force Global Black Text */
-        body, div, p, span, label, h1, h2, h3, h4, h5, h6, td, th {
-            color: #000000 !important;
-        }
-        /* Force White Background */
-        .stApp {
-            background-color: #ffffff !important;
-        }
-        /* Input Fields Visibility */
+        .stApp { background: #ffffff; }
+        /* Force input labels to be visible (Black color, Larger font) */
         .stSelectbox label, .stNumberInput label {
             color: #000000 !important;
             font-size: 16px !important;
             font-weight: bold !important;
         }
-        /* Dropdown Box Text */
+        /* Ensure dropdown text is visible */
         .stSelectbox div[data-baseweb="select"] > div {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Number Input Text */
+        /* Ensure number input text is visible */
         .stNumberInput input {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Progress Status Text */
+        /* Status Text Style */
         .stMarkdown h4 {
             color: #0000FF !important;
+        }
+        /* All Text Black */
+        body, p, div, span, td, th {
+            color: #000000 !important;
         }
         .block-container { padding-top: 60px !important; padding-bottom: 40px; max-width: 1350px; }
         .cover-box {
@@ -728,7 +727,7 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Sidebar
+    # Reset Button
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
         st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
