@@ -2,11 +2,14 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Ultimate Version: User Settings Restored & Mobile Optimized]
-# 1. XGBoost: 175 trees (Restored to User's optimal speed setting).
-# 2. Random Forest: 100 trees (Reduced to 100 because 300 was slow on mobile).
-# 3. Deep Learning: 100 epochs (Reduced to 100 for speed, Batch size 128).
-# 4. UI/UX: Black text forced, Progress bar active, Mobile layout optimized.
+# [Final Ultimate Version: Strict Adherence to User Guidelines]
+# 1. XGBoost: 175 trees (Optimal midpoint between 150 and 200).
+# 2. Random Forest: 130 trees (Between XGB(175) and DL(100), faster than 300).
+# 3. Deep Learning: 100 epochs, Batch 128 (Optimized for speed).
+# 4. System:
+#    - Caching (@st.cache_resource) preventing re-runs on mobile screen off.
+#    - Force Black Text for visibility.
+#    - Real-time Progress Bar.
 # ==============================================================================
 
 import streamlit as st
@@ -45,8 +48,6 @@ import shap
 import platform
 from matplotlib import font_manager, rc
 plt.rcParams['axes.unicode_minus'] = False
-
-# 폰트 설정 (한글 깨짐 방지)
 if platform.system() == 'Darwin':
     rc('font', family='AppleGothic')
 elif platform.system() == 'Windows':
@@ -117,10 +118,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [Corrected User Settings]
+        # [Final Locked Settings]
         self.learning_rate = 0.01 
-        self.batch_size = 128       # Fast Batch
-        self.epochs = 100           # DL: 100 (Mobile Optimized)
+        self.batch_size = 128       # DL: Fast Batch
+        self.epochs = 100           # DL: 100 Epochs
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -154,13 +155,13 @@ class ALDOptimizer:
 
     def _update_status(self, text):
         if self.status_callback:
+            # HTML Status Text for Visibility
             self.status_callback(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>")
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
-            # Fallback
             df = pd.DataFrame(columns=['Precursor', 'Thickness (nm)']) 
             
         df.replace('-', np.nan, inplace=True)
@@ -294,14 +295,14 @@ class ALDOptimizer:
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (100 Trees - Mobile Speed Optimized)
-        self._update_status("Random Forest (100 Trees) 학습 중... [2/3]")
+        # 2. Random Forest (130 Trees) - Adjusted to be between XGB(175) and DL(100)
+        self._update_status("Random Forest (130 Trees) 학습 중... [2/3]")
         self._update_progress(0.5)
-        rf_model = RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
+        rf_model = RandomForestRegressor(n_estimators=130, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (100 Epochs - Mobile Speed Optimized)
+        # 3. PyTorch MLP (100 Epochs, Batch 128)
         self._update_status("Deep Learning (100 Epochs) 학습 중... [3/3]")
         self._update_progress(0.75)
         self._train_pytorch_mlp()
@@ -353,7 +354,7 @@ class ALDOptimizer:
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if epoch > 50 and patience_counter >= 10: # Fast Early Stop
+                if epoch > 50 and patience_counter >= 10: # Mobile Early Stop
                     break
         
         if os.path.exists(self.best_model_path):
@@ -603,7 +604,6 @@ def main_gui():
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         if not os.path.exists(path): return None
-        # Initialize without callbacks for the very first cached run
         return ALDOptimizer(path, mode="gui", progress_callback=None, status_callback=None)
 
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
@@ -613,27 +613,22 @@ def main_gui():
         """
         <style>
         .stApp { background: #ffffff; }
-        /* Force input labels to be visible (Black color, Larger font) */
         .stSelectbox label, .stNumberInput label {
             color: #000000 !important;
             font-size: 16px !important;
             font-weight: bold !important;
         }
-        /* Ensure dropdown text is visible */
         .stSelectbox div[data-baseweb="select"] > div {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Ensure number input text is visible */
         .stNumberInput input {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Status Text Style */
         .stMarkdown h4 {
             color: #0000FF !important;
         }
-        /* All Text Black */
         body, p, div, span, td, th {
             color: #000000 !important;
         }
@@ -727,7 +722,7 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Reset Button
+    # Sidebar
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
         st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
