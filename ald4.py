@@ -2,13 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version: Mobile Performance Optimized]
-# 1. Data Augmentation: Reduced from 5x to 2x (Major speed boost for mobile).
-# 2. Parameters Tuned for Mobile CPU:
-#    - XGBoost: 100 trees
-#    - Random Forest: 300 trees
-#    - Deep Learning: 100 epochs
-# 3. UI: Full Visibility (Black Text) & Progress Bar enabled.
+# [Final Version v7: Force Light Theme & Visibility]
+# 1. CSS Fix: Forced Background to WHITE and Text to BLACK globally.
+#    -> Solves "Black text on Black background" issue in Dark Mode.
+# 2. Parameters Locked: XGB(175), RF(700), MLP(150).
+# 3. Logic: Physics, Graph Smoothing, Mobile Caching all included.
 # ==============================================================================
 
 import streamlit as st
@@ -117,10 +115,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [Mobile Optimized Settings]
+        # [Final Params: Locked]
         self.learning_rate = 0.01 
         self.batch_size = 64
-        self.epochs = 100           # DL: 100 (Mobile Fast)
+        self.epochs = 150           # DL: 150
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -154,14 +152,13 @@ class ALDOptimizer:
 
     def _update_status(self, text):
         if self.status_callback:
-            # Force Black Text for Visibility
-            self.status_callback(f"<h5 style='color:black; font-weight:bold;'>🔄 {text}</h5>")
+            # Status Text: Blue & Bold
+            self.status_callback(f"<h4 style='color:blue; font-weight:bold; margin:0;'>🔄 {text}</h4>")
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
-            # Fallback
             df = pd.DataFrame(columns=['Precursor', 'Thickness (nm)']) 
             
         df.replace('-', np.nan, inplace=True)
@@ -217,8 +214,8 @@ class ALDOptimizer:
         X_combined = np.vstack([X_imp, X_phys])
         Y_combined = np.vstack([Y_imp, Y_phys])
         
-        # [Speed Fix] Augmentation Reduced: 5x -> 2x
-        X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=2)
+        # Augmentation
+        X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=5)
         
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
@@ -279,7 +276,7 @@ class ALDOptimizer:
             
         return np.array(X_synth), np.array(Y_synth)
 
-    def _augment_data(self, X, Y, noise=0.01, multiplier=2):
+    def _augment_data(self, X, Y, noise=0.01, multiplier=5):
         X_aug, Y_aug = [X], [Y]
         for _ in range(multiplier):
             n = np.random.normal(0, noise, X.shape)
@@ -288,22 +285,22 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (100 Trees - Mobile Fast)
-        self._update_status("XGBoost (100 Trees) 학습 중... [1/3]")
+        # 1. XGBoost (175 Trees)
+        self._update_status("XGBoost (175 Trees) 학습 중... [1/3]")
         self._update_progress(0.2)
-        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5, n_jobs=-1)
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (300 Trees - Mobile Balanced)
-        self._update_status("Random Forest (300 Trees) 학습 중... [2/3]")
+        # 2. Random Forest (700 Trees)
+        self._update_status("Random Forest (700 Trees) 학습 중... [2/3]")
         self._update_progress(0.5)
-        rf_model = RandomForestRegressor(n_estimators=300, max_depth=None, random_state=42, n_jobs=-1)
+        rf_model = RandomForestRegressor(n_estimators=700, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (100 Epochs - Mobile Fast)
-        self._update_status("Deep Learning (100 Epochs) 학습 중... [3/3]")
+        # 3. PyTorch MLP (150 Epochs)
+        self._update_status("Deep Learning (150 Epochs) 학습 중... [3/3]")
         self._update_progress(0.75)
         self._train_pytorch_mlp()
         
@@ -322,6 +319,7 @@ class ALDOptimizer:
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
         optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
         
         loss_weights = torch.ones(self.output_dim).to(self.device)
         try:
@@ -344,8 +342,8 @@ class ALDOptimizer:
             
             if epoch % 20 == 0:
                 progress = 0.75 + (0.20 * (epoch / self.epochs))
-                self._update_progress(progress)
                 self._update_status(f"Deep Learning 진행 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
+                self._update_progress(progress)
 
             if loss.item() < best_loss:
                 best_loss = loss.item()
@@ -353,7 +351,7 @@ class ALDOptimizer:
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if epoch > 50 and patience_counter >= 10: # Mobile Guard
+                if epoch > 100 and patience_counter >= 15: # Min 100 Epochs Guard
                     break
         
         if os.path.exists(self.best_model_path):
@@ -603,38 +601,42 @@ def main_gui():
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         if not os.path.exists(path): return None
+        # Initialize without callbacks for the very first cached run
         return ALDOptimizer(path, mode="gui", progress_callback=None, status_callback=None)
 
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # [CSS Injection] Force Text Visibility & Layout
+    # [CSS Injection] - Ultimate Visibility Fix
     st.markdown(
         """
         <style>
-        .stApp { background: #ffffff; }
-        /* Force input labels to be visible (Black color, Larger font) */
+        /* Force Global Black Text */
+        body, div, p, span, label, h1, h2, h3, h4, h5, h6, td, th {
+            color: #000000 !important;
+        }
+        /* Force White Background */
+        .stApp {
+            background-color: #ffffff !important;
+        }
+        /* Input Fields Visibility */
         .stSelectbox label, .stNumberInput label {
             color: #000000 !important;
             font-size: 16px !important;
             font-weight: bold !important;
         }
-        /* Ensure dropdown text is visible */
+        /* Dropdown Box Text */
         .stSelectbox div[data-baseweb="select"] > div {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Ensure number input text is visible */
+        /* Number Input Text */
         .stNumberInput input {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Status Text Style */
+        /* Progress Status Text */
         .stMarkdown h4 {
             color: #0000FF !important;
-        }
-        /* All Text Black */
-        body, p, div, span, td, th {
-            color: #000000 !important;
         }
         .block-container { padding-top: 60px !important; padding-bottom: 40px; max-width: 1350px; }
         .cover-box {
@@ -726,7 +728,7 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Reset Button
+    # Sidebar
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
         st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
