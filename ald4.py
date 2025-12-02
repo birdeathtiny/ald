@@ -2,11 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Perfect Version v5]
-# 1. Fixed TypeError: Restored 'status_callback' in ALDOptimizer.__init__.
-#    -> Now properly displays "Training..." text status updates.
+# [Final Version v6: Fixed NotFittedError]
+# 1. SHAP Fix: Removed 'self.poly.get_feature_names_out()' call.
+#    -> Now correctly uses raw feature names since Poly features were skipped for speed.
 # 2. Parameters Locked: XGB(175), RF(700), MLP(150).
-# 3. UI/UX: All Layout, Visibility, and Mobile fixes included.
+# 3. UI/UX: All visibility & mobile fixes included.
 # ==============================================================================
 
 import streamlit as st
@@ -111,7 +111,7 @@ class ALDOptimizer:
     def __init__(self, file_path: str, mode: str = "cli", progress_callback=None, status_callback=None):
         self.mode = mode
         self.progress_callback = progress_callback
-        self.status_callback = status_callback  # [Fixed] Restore status callback
+        self.status_callback = status_callback
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -221,7 +221,7 @@ class ALDOptimizer:
         X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
         self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        # No Poly
+        # No Poly (for Speed)
         self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
         self.X_val_sc = self.X_scaler.transform(self.X_val)
         self.X_test_sc = self.X_scaler.transform(self.X_test)
@@ -583,12 +583,14 @@ class ALDOptimizer:
         return preds
 
     def get_shap(self):
+        # SHAP FIX: Do not use self.poly (Not Fitted)
         try: sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
         except: sc_idx = 0
         model = self.models['xgboost'].estimators_[sc_idx]
         explainer = shap.TreeExplainer(model)
         shap_vals = explainer.shap_values(self.X_test_sc)
-        return explainer, shap_vals, self.X_test_sc, self.poly.get_feature_names_out(self.all_input_cols)
+        # Return RAW feature names
+        return explainer, shap_vals, self.X_test_sc, self.all_input_cols
 
 # ------------------------------------------------------------------------------
 # 4. Streamlit GUI
@@ -631,6 +633,10 @@ def main_gui():
         /* Status Text Style */
         .stMarkdown h4 {
             color: #0000FF !important;
+        }
+        /* All Text Black */
+        body, p, div, span, td, th {
+            color: #000000 !important;
         }
         .block-container { padding-top: 60px !important; padding-bottom: 40px; max-width: 1350px; }
         .cover-box {
@@ -686,25 +692,24 @@ def main_gui():
     progress_container = st.empty()
 
     if 'optimizer' not in st.session_state:
-        with st.spinner("AI 모델 초기화 중..."):
-            # Manual callbacks for first run visual
-            def update_p(val): progress_container.progress(val)
-            def update_s(txt): status_container.markdown(f"<h4>🔄 {txt}</h4>", unsafe_allow_html=True)
+        # Manual progress update for the first run (uncached visual)
+        def update_p(val): progress_container.progress(val)
+        def update_s(txt): status_container.markdown(f"<h4>{txt}</h4>", unsafe_allow_html=True)
+        
+        csv = "AI_ALD1.csv"
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
+        if not os.path.exists(path): path = csv
+        
+        if os.path.exists(path):
+            update_s("🔄 AI 모델 초기화 및 데이터 전처리 중...")
+            opt = ALDOptimizer(path, mode="gui", progress_callback=update_p, status_callback=update_s)
+            st.session_state['optimizer'] = opt
             
-            csv = "AI_ALD1.csv"
-            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
-            if not os.path.exists(path): path = csv
-            
-            if os.path.exists(path):
-                # First run: Instantiate directly with callbacks
-                opt_instance = ALDOptimizer(path, mode="gui", progress_callback=update_p, status_callback=update_s)
-                st.session_state['optimizer'] = opt_instance
-                
-                progress_container.empty()
-                status_container.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
-            else:
-                st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
-                st.stop()
+            progress_container.empty()
+            status_container.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
+        else:
+            st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
+            st.stop()
     
     # Main Expander
     with st.expander("🎯 공정 목표 설정 (펼치기/접기)", expanded=True):
@@ -723,7 +728,7 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Reset Button
+    # Sidebar
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
         st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
