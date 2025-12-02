@@ -2,12 +2,12 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version: No Double Loading & Perfect Parameters]
-# 1. Fix: Removed st.spinner completely. Only Progress Bar is shown.
-#    - This eliminates the "Double Loading" visual glitch.
-# 2. Logic: Uses st.session_state exclusively for persistence (Mobile Optimized).
-# 3. Parameters: XGB(175), RF(130), MLP(100/256) - LOCKED.
-# 4. UI: Forced White Theme & Black Text.
+# [Final Version: Progress Bar VISIBLE & No Re-run]
+# 1. Fix: Removed @st.cache_resource. It was hiding the progress bar.
+#    -> Now relies 100% on st.session_state for persistence.
+#    -> First load: Shows Progress Bar. Subsequent actions: Instant (No loading).
+# 2. Parameters Locked: XGB(175), RF(130), MLP(100/256).
+# 3. UI: White Theme, Black Text, Colored Buttons.
 # ==============================================================================
 
 import streamlit as st
@@ -137,10 +137,9 @@ class ALDOptimizer:
         self.all_input_cols = []
         self.all_output_cols = []
         
-        # UI Placeholders (Initialized inside to allow direct updates)
+        # UI Placeholders (Created here to ensure visibility)
         self.status_container = None
         self.progress_bar = None
-        
         if self.mode == 'gui':
             self.status_container = st.empty()
             self.progress_bar = st.progress(0)
@@ -164,7 +163,7 @@ class ALDOptimizer:
     def _update_ui(self, value, text):
         if self.mode == "gui":
             self.progress_bar.progress(min(value, 1.0))
-            # Blue Bold Text
+            # Force Visible Blue Text
             self.status_container.markdown(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>", unsafe_allow_html=True)
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
@@ -323,7 +322,6 @@ class ALDOptimizer:
         Y_t = torch.FloatTensor(self.Y_train_sc).to(self.device)
         
         dataset = TensorDataset(X_t, Y_t)
-        # Batch 256 for Speed
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
@@ -346,7 +344,7 @@ class ALDOptimizer:
                 loss.backward()
                 optimizer.step()
             
-            # Update UI every 20 epochs to prevent freeze
+            # Update UI every 20 epochs
             if epoch % 20 == 0:
                 self._update_ui(0.75 + (0.20 * (epoch / self.epochs)), f"Deep Learning 진행 중... Epoch {epoch}/{self.epochs}")
         
@@ -593,50 +591,46 @@ class ALDOptimizer:
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # [CSS Injection] - Ultimate Visibility & Color Fix
+    # [CSS Injection] Force Text Visibility & Layout
     st.markdown(
         """
         <style>
-        /* Force White Background */
-        .stApp {
-            background-color: #ffffff !important;
-        }
-        
-        /* Force All Text Black */
-        body, p, div, span, label, h1, h2, h3, h4, h5, h6, td, th, li {
-            color: #000000 !important;
-        }
-        
-        /* Input Fields */
+        .stApp { background: #ffffff; }
+        /* Force input labels to be visible (Black color, Larger font) */
         .stSelectbox label, .stNumberInput label {
             color: #000000 !important;
             font-size: 1rem !important;
             font-weight: 700 !important;
         }
-        div[data-baseweb="select"] > div, .stNumberInput input {
-            background-color: #f0f2f6 !important;
+        /* Ensure dropdown text is visible */
+        .stSelectbox div[data-baseweb="select"] > div {
             color: #000000 !important;
-            border: 1px solid #cccccc !important;
+            background-color: #f0f2f6 !important;
+        }
+        /* Ensure number input text is visible */
+        .stNumberInput input {
+            color: #000000 !important;
+            background-color: #f0f2f6 !important;
         }
         
-        /* Expander Header */
+        /* Fix Expander Header Visibility Fix */
+        div[data-testid="stExpander"] details summary {
+            background-color: #f0f2f6 !important;
+            color: #000000 !important;
+        }
         .streamlit-expanderHeader {
-            background-color: #f0f2f6 !important;
             color: #000000 !important;
-            font-weight: bold !important;
-        }
-        div[data-testid="stExpander"] details summary span {
-             color: #000000 !important;
+            background-color: #f0f2f6 !important;
         }
         
-        /* Status Text (Blue) */
-        h4 {
-            color: #0068c9 !important;
+        /* All Text Black */
+        body, p, div, span, td, th {
+            color: #000000 !important;
         }
         
         /* Buttons */
         div.stButton > button:first-child {
-            background-color: #FF4B4B !important; /* Orange-Red */
+            background-color: #FF4B4B !important; /* Orange Red */
             color: #ffffff !important;
             border: none !important;
             font-weight: bold !important;
@@ -646,10 +640,12 @@ def main_gui():
             color: #ffffff !important;
         }
 
-        /* Container Padding */
+        /* Status Text */
+        h4 { color: #0068c9 !important; }
+
         .block-container { padding-top: 60px !important; padding-bottom: 40px; max-width: 1350px; }
         
-        /* Original Cover Box */
+        /* Cover Box */
         .cover-box {
             border-radius: 24px;
             padding: 24px 32px;
@@ -657,11 +653,6 @@ def main_gui():
             margin-top: 10px;
             background: linear-gradient(135deg, #dff3ff 0%, #ffffff 50%, #f5fff7 100%);
             box-shadow: 0 6px 14px rgba(0,0,0,0.06);
-        }
-        .cover-badge {
-            display: inline-block; padding: 10px 24px; border-radius: 999px;
-            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 16px;
-            margin-bottom: 10px; margin-left: -12px;
         }
         header {visibility: hidden;}
         </style>
@@ -689,17 +680,22 @@ def main_gui():
         unsafe_allow_html=True,
     )
     
+    status_container = st.empty()
+    progress_container = st.empty()
+
     if 'optimizer' not in st.session_state:
-        # Manual object creation (First run - Not Cached, but saved to Session State)
-        # This avoids the 'st.spinner' double loading visual.
+        # Manual instantiation for first run (shows progress)
         csv = "AI_ALD1.csv"
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         
         if os.path.exists(path):
+            # Direct call without cache to show progress
             opt = ALDOptimizer(path, mode="gui")
             st.session_state['optimizer'] = opt
-            st.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
+            
+            progress_container.empty()
+            status_container.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
         else:
             st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
             st.stop()
@@ -716,7 +712,7 @@ def main_gui():
         if st.button("🚀 최적 레시피 도출", use_container_width=True):
             user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
             optimizer = st.session_state['optimizer']
-            # No Spinner here either, just run
+            # No Spinner - just runs
             recipe, pred, phy, res = optimizer.optimize(user_input)
             st.session_state.res = (recipe, pred, phy, res, user_input)
 
@@ -813,8 +809,6 @@ def main_gui():
         with t3:
             st.markdown("### 🧠 Explainable AI (SHAP)")
             if st.button("SHAP 분석 시작"):
-                # Spinner removed as requested, using internal progress if needed or just wait
-                # SHAP calculation is usually fast enough or just blocking
                 exp, vals, X_test, feats = optimizer.get_shap()
                 fig, ax = plt.subplots()
                 shap.summary_plot(vals, X_test, feature_names=feats, show=False)
