@@ -2,11 +2,15 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Ultimate Visibility Fix]
-# 1. Nuclear CSS: Forces ALL input text, dropdown text, and labels to BLACK.
-#    - Overrides browser dark mode defaults for input fields.
-# 2. Parameters Locked: XGB(175), RF(130), MLP(100).
-# 3. All other features (Caching, Progress Bar) retained.
+# [Final Ultimate Version: Deep Learning Speed Maxed Out]
+# 1. Parameters STRICTLY LOCKED:
+#    - XGBoost: 175 trees
+#    - Random Forest: 130 trees
+#    - Deep Learning: 100 epochs
+# 2. Speed Hack: 
+#    - Deep Learning Batch Size set to 256 (Full Batch Training).
+#    - This maintains 100 epochs but executes them significantly faster.
+# 3. UI: Black text forced, Progress bar active, Mobile layout optimized.
 # ==============================================================================
 
 import streamlit as st
@@ -78,6 +82,7 @@ COST_WEIGHTS = {
 class ALDRegressor(nn.Module):
     def __init__(self, input_size, output_size):
         super(ALDRegressor, self).__init__()
+        # Lightweight Architecture for Speed
         self.layer_stack = nn.Sequential(
             nn.Linear(input_size, 64),
             nn.BatchNorm1d(64),
@@ -115,10 +120,10 @@ class ALDOptimizer:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [LOCKED SETTINGS]
+        # [LOCKED USER SETTINGS]
         self.learning_rate = 0.01 
-        self.batch_size = 128       # DL Speed Up
-        self.epochs = 100           # DL: 100
+        self.batch_size = 256       # SPEED HACK: Full Batch
+        self.epochs = 100           # LOCKED: 100 Epochs
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -143,8 +148,8 @@ class ALDOptimizer:
         
         self._update_status("AI 모델 학습 시작...")
         self.performance_df = self._train_ensemble_models()
-        
-        self._update_ui_final()
+        self._update_progress(1.0)
+        self._update_status("학습 완료! 시스템 준비됨.")
 
     def _update_progress(self, value):
         if self.progress_callback:
@@ -152,13 +157,8 @@ class ALDOptimizer:
 
     def _update_status(self, text):
         if self.status_callback:
-            # Force Blue Bold Text
+            # HTML Status Text for Visibility
             self.status_callback(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>")
-
-    def _update_ui_final(self):
-        self._update_progress(1.0)
-        self._update_status("학습 완료! 시스템 준비됨.")
-        time.sleep(0.5)
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -290,21 +290,21 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (175 Trees)
+        # 1. XGBoost (175 Trees - Locked)
         self._update_status("XGBoost (175 Trees) 학습 중... [1/3]")
         self._update_progress(0.2)
         xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (130 Trees)
+        # 2. Random Forest (130 Trees - Locked)
         self._update_status("Random Forest (130 Trees) 학습 중... [2/3]")
         self._update_progress(0.5)
         rf_model = RandomForestRegressor(n_estimators=130, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (100 Epochs)
+        # 3. PyTorch MLP (100 Epochs, Batch 256 - SPEED HACK)
         self._update_status("Deep Learning (100 Epochs) 학습 중... [3/3]")
         self._update_progress(0.75)
         self._train_pytorch_mlp()
@@ -345,9 +345,9 @@ class ALDOptimizer:
                 loss.backward()
                 optimizer.step()
             
-            if epoch % 20 == 0:
-                self._update_progress(0.75 + (0.20 * (epoch / self.epochs)))
-                self._update_status(f"Deep Learning 진행 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
+            # Reduced UI updates to speed up loop
+            if epoch % 50 == 0:
+                self._update_status(f"Deep Learning 진행 중... Epoch {epoch}/{self.epochs}")
 
             if loss.item() < best_loss:
                 best_loss = loss.item()
@@ -355,7 +355,7 @@ class ALDOptimizer:
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if epoch > 50 and patience_counter >= 10:
+                if epoch > 50 and patience_counter >= 15: 
                     break
         
         if os.path.exists(self.best_model_path):
@@ -556,12 +556,14 @@ class ALDOptimizer:
         for v in values:
             row = base_row.copy()
             if x_col in row: row[x_col] = v
-            elif x_col.replace(" ", "_") in row: row[x_col.replace(" ", "_")] = v
-            elif x_col.replace("_", " ") in row: row[x_col.replace("_", " ")] = v
-            elif "_Pulse Time" in x_col: 
-                row["Precursor_Pulse Time (s)"] = v
-                row["Co-reactant_Pulse Time (s)"] = v
+            else:
+                x_col_alt = x_col.replace(" ", "_")
+                if x_col_alt in row: row[x_col_alt] = v
             
+            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
+                 row["Precursor_Pulse Time (s)"] = v
+                 row["Co-reactant_Pulse Time (s)"] = v
+
             batch_data.append(row)
             
         df_batch = pd.DataFrame(batch_data)
@@ -598,14 +600,12 @@ class ALDOptimizer:
 # ------------------------------------------------------------------------------
 
 def main_gui():
-    # [Cache Logic]
     @st.cache_resource
     def get_trained_optimizer():
         csv = "AI_ALD1.csv"
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         if not os.path.exists(path): return None
-        # Initialize without callbacks for the very first cached run
         return ALDOptimizer(path, mode="gui", progress_callback=None, status_callback=None)
 
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
@@ -615,27 +615,22 @@ def main_gui():
         """
         <style>
         .stApp { background: #ffffff; }
-        /* Force input labels to be visible (Black color, Larger font) */
         .stSelectbox label, .stNumberInput label {
             color: #000000 !important;
             font-size: 16px !important;
             font-weight: bold !important;
         }
-        /* Ensure dropdown text is visible */
         .stSelectbox div[data-baseweb="select"] > div {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Ensure number input text is visible */
         .stNumberInput input {
             color: #000000 !important;
             background-color: #f0f2f6 !important;
         }
-        /* Status Text Style */
         .stMarkdown h4 {
             color: #0000FF !important;
         }
-        /* All Text Black */
         body, p, div, span, td, th {
             color: #000000 !important;
         }
@@ -648,17 +643,6 @@ def main_gui():
             background: linear-gradient(135deg, #dff3ff 0%, #ffffff 50%, #f5fff7 100%);
             box-shadow: 0 6px 14px rgba(0,0,0,0.06);
         }
-        .cover-top-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-        .cover-badge {
-            display: inline-block; padding: 10px 24px; border-radius: 999px;
-            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 16px;
-            margin-bottom: 10px; margin-left: -12px;
-        }
-        .cover-title { font-size: 36px; font-weight: 800; color: #111111; margin: 4px 0 10px 0; }
-        .cover-sub-main { font-size: 20px; font-weight: 700; color: #222222; }
-        .cover-sub-sub { font-size: 18px; font-weight: 600; color: #333333; }
-        .cover-logo-area { text-align: right; font-size: 15px; color: #444444; }
-        .cover-logo-text { line-height: 1.3; margin-bottom: 6px; }
         header {visibility: hidden;}
         </style>
         """,
@@ -668,12 +652,12 @@ def main_gui():
     st.markdown(
         """
         <div class="cover-box">
-            <div class="cover-top-row">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                 <div>
-                    <div class="cover-badge">2025 제1회 Google-아주대학교</div>
-                    <div class="cover-title">AI 기반 ALD 공정 최적화 시스템</div>
-                    <div class="cover-sub-main">AI 융합 캡스톤 디자인 대회</div>
-                    <div class="cover-sub-sub">최종성과발표회</div>
+                    <div style="display: inline-block; padding: 10px 24px; border-radius: 999px; background: #e5f9e8; color: #176a3a; font-weight: 700; margin-bottom: 10px;">2025 제1회 Google-아주대학교</div>
+                    <div style="font-size: 36px; font-weight: 800; color: #111111; margin: 4px 0 10px 0;">AI 기반 ALD 공정 최적화 시스템</div>
+                    <div style="font-size: 20px; font-weight: 700; color: #222222;">AI 융합 캡스톤 디자인 대회</div>
+                    <div style="font-size: 18px; font-weight: 600; color: #333333;">최종성과발표회</div>
                 </div>
                 <div class="cover-logo-area">
                     <div class="cover-logo-text">
@@ -688,12 +672,10 @@ def main_gui():
         unsafe_allow_html=True,
     )
     
-    # Initialize Status Container
     status_container = st.empty()
     progress_container = st.empty()
 
     if 'optimizer' not in st.session_state:
-        # Manual progress update for the first run (uncached visual)
         def update_p(val): progress_container.progress(val)
         def update_s(txt): status_container.markdown(f"<h4>🔄 {txt}</h4>", unsafe_allow_html=True)
         
@@ -712,7 +694,6 @@ def main_gui():
             st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
             st.stop()
     
-    # Main Expander
     with st.expander("🎯 공정 목표 설정 (펼치기/접기)", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -729,7 +710,6 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Reset Button
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
         st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
