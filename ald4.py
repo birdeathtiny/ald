@@ -2,15 +2,14 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version v9: User Specs 175/130/100 LOCKED]
-# *** ABSOLUTELY LOCKED SETTINGS ***
-# 1. XGBoost: 175 trees (Fixed).
-# 2. Random Forest: 130 trees (Fixed, Multi-core n_jobs=-1).
-# 3. Deep Learning: 100 epochs, Batch 128 (Fixed).
-# 
-# [Fixes]
-# - TypeError Fixed: Removed callback passing to prevent cache errors.
-# - UI: Black text forced, Progress bar handled internally.
+# [Final Version v10: TypeError Fixed & Specs Locked]
+# 1. Bug Fix: Added 'progress_callback' and 'status_callback' to ALDOptimizer.__init__.
+#    -> Solves the TypeError causing the crash.
+# 2. Parameters Locked (Strict User Instruction):
+#    - XGBoost: 175 trees
+#    - Random Forest: 130 trees (Multi-core)
+#    - Deep Learning: 100 epochs (Batch 128)
+# 3. UI/UX: Black text, Progress Bar, Mobile Layout.
 # ==============================================================================
 
 import streamlit as st
@@ -111,16 +110,18 @@ class ALDRegressor(nn.Module):
 # ------------------------------------------------------------------------------
 
 class ALDOptimizer:
-    
-    def __init__(self, file_path: str, mode: str = "cli"):
+    # [FIXED] Added progress_callback and status_callback arguments here
+    def __init__(self, file_path: str, mode: str = "cli", progress_callback=None, status_callback=None):
         self.mode = mode
+        self.progress_callback = progress_callback
+        self.status_callback = status_callback
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # [LOCKED PARAMETERS: 175 / 130 / 100]
+        # [LOCKED USER SETTINGS]
         self.learning_rate = 0.01 
-        self.batch_size = 128       # DL: 128 (Fast Batch)
-        self.epochs = 100           # DL: 100 (Fixed)
+        self.batch_size = 128       # DL Speed Up
+        self.epochs = 100           # DL: 100
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
         
@@ -136,33 +137,31 @@ class ALDOptimizer:
         self.all_input_cols = []
         self.all_output_cols = []
         
-        # GUI UI Holders
-        self.status_container = None
-        self.progress_bar = None
-        
-        if self.mode == "gui":
-            self.status_container = st.empty()
-            self.progress_bar = st.progress(0)
-        
         # Pipeline Start
-        self._update_ui(0.0, "데이터 로드 및 전처리 중...")
+        self._update_status("데이터 로드 및 전처리 중...")
+        self._update_progress(0.0)
+        
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
         
-        self._update_ui(0.1, "AI 모델 학습 시작...")
+        self._update_status("AI 모델 학습 시작...")
         self.performance_df = self._train_ensemble_models()
         
-        self._update_ui(1.0, "학습 완료! 시스템 준비됨.")
-        time.sleep(0.5)
-        if self.mode == "gui":
-            self.status_container.empty()
-            self.progress_bar.empty()
+        self._update_ui_final()
 
-    def _update_ui(self, value, text):
-        if self.mode == "gui":
-            self.progress_bar.progress(min(value, 1.0))
-            # Force Blue and Bold text
-            self.status_container.markdown(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>", unsafe_allow_html=True)
+    def _update_progress(self, value):
+        if self.progress_callback:
+            self.progress_callback(value)
+
+    def _update_status(self, text):
+        if self.status_callback:
+            # Force Blue Bold Text
+            self.status_callback(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>")
+
+    def _update_ui_final(self):
+        self._update_progress(1.0)
+        self._update_status("학습 완료! 시스템 준비됨.")
+        time.sleep(0.5)
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -294,23 +293,27 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (175 Trees - Fixed)
-        self._update_ui(0.2, "XGBoost (175 Trees) 학습 중... [1/3]")
+        # 1. XGBoost (175 Trees)
+        self._update_status("XGBoost (175 Trees) 학습 중... [1/3]")
+        self._update_progress(0.2)
         xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (130 Trees - Fixed, Multi-core)
-        self._update_ui(0.5, "Random Forest (130 Trees) 학습 중... [2/3]")
+        # 2. Random Forest (130 Trees) - Multi-core
+        self._update_status("Random Forest (130 Trees) 학습 중... [2/3]")
+        self._update_progress(0.5)
         rf_model = RandomForestRegressor(n_estimators=130, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (100 Epochs, Batch 128 - Fixed)
-        self._update_ui(0.75, "Deep Learning (100 Epochs) 학습 중... [3/3]")
+        # 3. PyTorch MLP (100 Epochs, Batch 128)
+        self._update_status("Deep Learning (100 Epochs) 학습 중... [3/3]")
+        self._update_progress(0.75)
         self._train_pytorch_mlp()
         
-        self._update_ui(0.9, "모델 가중치 최적화 중...")
+        self._update_status("모델 가중치 최적화 중...")
+        self._update_progress(0.9)
         self._optimize_weights()
         
         return self._evaluate_ensemble()
@@ -345,8 +348,9 @@ class ALDOptimizer:
                 loss.backward()
                 optimizer.step()
             
-            if epoch % 10 == 0:
-                self._update_ui(0.75 + (0.20 * (epoch / self.epochs)), f"Deep Learning 진행 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
+            if epoch % 20 == 0:
+                self._update_progress(0.75 + (0.20 * (epoch / self.epochs)))
+                self._update_status(f"Deep Learning 진행 중... Epoch {epoch}/{self.epochs} (Loss: {loss.item():.5f})")
 
             if loss.item() < best_loss:
                 best_loss = loss.item()
@@ -599,18 +603,6 @@ class ALDOptimizer:
 # ------------------------------------------------------------------------------
 
 def main_gui():
-    @st.cache_resource
-    def get_trained_optimizer():
-        csv = "AI_ALD1.csv"
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
-        if not os.path.exists(path): path = csv
-        if not os.path.exists(path): return None
-        # Cache the optimizer object.
-        # Note: Callbacks are not passed to cached function to avoid pickling issues.
-        # The first run (uncached) will show progress. 
-        # Subsequent runs (cached) will be instant.
-        return ALDOptimizer(path, mode="cli") 
-
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
     # [CSS Injection] Force Black Text & White Background
@@ -672,29 +664,21 @@ def main_gui():
         unsafe_allow_html=True,
     )
     
-    # Initialize Status Container
     status_container = st.empty()
     progress_container = st.empty()
 
     if 'optimizer' not in st.session_state:
-        # Initialize on first load (Non-cached run for UI feedback)
+        def update_p(val): progress_container.progress(val)
+        def update_s(txt): status_container.markdown(f"<h4>🔄 {txt}</h4>", unsafe_allow_html=True)
+        
         csv = "AI_ALD1.csv"
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         
         if os.path.exists(path):
-            # Manual Instantiation to show progress
-            def update_p(val): progress_container.progress(val)
-            def update_s(txt): status_container.markdown(f"<h4>🔄 {txt}</h4>", unsafe_allow_html=True)
-            
+            update_s("AI 모델 초기화 및 데이터 전처리 중...")
             opt = ALDOptimizer(path, mode="gui", progress_callback=update_p, status_callback=update_s)
-            st.session_state['optimizer'] = opt # Save to session state
-            
-            # We also call the cached function so it's cached for next reload (e.g. mobile refresh)
-            # But since we already have the object, we can just rely on session_state persistence.
-            # The @st.cache_resource is mainly for when the app script re-runs from top.
-            # If session_state is lost (browser refresh), cache saves us.
-            _ = get_trained_optimizer() 
+            st.session_state['optimizer'] = opt
             
             progress_container.empty()
             status_container.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
@@ -702,7 +686,6 @@ def main_gui():
             st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
             st.stop()
     
-    # Main Expander
     with st.expander("🎯 공정 목표 설정 (펼치기/접기)", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -719,7 +702,6 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Reset Button
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
         st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
