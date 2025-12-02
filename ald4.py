@@ -2,13 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version: Visibility Nuclear Fix & Locked Specs]
-# 1. Visibility: 
-#    - Forced WHITE background for App, Expanders, and Inputs.
-#    - Forced BLACK text for Labels, Headers, and Paragraphs.
-#    - Forced HIGH CONTRAST (Blue/White) for Buttons.
-# 2. Parameters Locked: XGB(175), RF(130), MLP(100/128).
-# 3. System: Session State logic handles mobile persistence.
+# [Final Ultimate Visibility Fix]
+# 1. Nuclear CSS: Forces ALL input text, dropdown text, and labels to BLACK.
+#    - Overrides browser dark mode defaults for input fields.
+# 2. Parameters Locked: XGB(175), RF(130), MLP(100).
+# 3. All other features (Caching, Progress Bar) retained.
 # ==============================================================================
 
 import streamlit as st
@@ -119,7 +117,7 @@ class ALDOptimizer:
         
         # [LOCKED SETTINGS]
         self.learning_rate = 0.01 
-        self.batch_size = 128       # Fast Batch
+        self.batch_size = 128       # DL Speed Up
         self.epochs = 100           # DL: 100
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
@@ -145,8 +143,8 @@ class ALDOptimizer:
         
         self._update_status("AI 모델 학습 시작...")
         self.performance_df = self._train_ensemble_models()
-        self._update_progress(1.0)
-        self._update_status("학습 완료! 시스템 준비됨.")
+        
+        self._update_ui_final()
 
     def _update_progress(self, value):
         if self.progress_callback:
@@ -154,7 +152,13 @@ class ALDOptimizer:
 
     def _update_status(self, text):
         if self.status_callback:
-            self.status_callback(f"🔄 {text}")
+            # Force Blue Bold Text
+            self.status_callback(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>")
+
+    def _update_ui_final(self):
+        self._update_progress(1.0)
+        self._update_status("학습 완료! 시스템 준비됨.")
+        time.sleep(0.5)
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
@@ -351,7 +355,7 @@ class ALDOptimizer:
                 torch.save(self.models['mlp'].state_dict(), self.best_model_path)
             else:
                 patience_counter += 1
-                if epoch > 50 and patience_counter >= 10: # Min 50 Guard
+                if epoch > 50 and patience_counter >= 10:
                     break
         
         if os.path.exists(self.best_model_path):
@@ -594,61 +598,48 @@ class ALDOptimizer:
 # ------------------------------------------------------------------------------
 
 def main_gui():
+    # [Cache Logic]
+    @st.cache_resource
+    def get_trained_optimizer():
+        csv = "AI_ALD1.csv"
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
+        if not os.path.exists(path): path = csv
+        if not os.path.exists(path): return None
+        # Initialize without callbacks for the very first cached run
+        return ALDOptimizer(path, mode="gui", progress_callback=None, status_callback=None)
+
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # [CSS Injection]
+    # [CSS Injection] Force Text Visibility & Layout
     st.markdown(
         """
         <style>
-        /* 1. Force White Background for the entire app */
-        .stApp {
-            background-color: #ffffff !important;
-        }
-        
-        /* 2. Force ALL Text to Black */
-        .stApp, .stApp * {
-            color: #000000 !important;
-        }
-        
-        /* 3. Fix Input Labels (Selectbox, NumberInput) */
+        .stApp { background: #ffffff; }
+        /* Force input labels to be visible (Black color, Larger font) */
         .stSelectbox label, .stNumberInput label {
             color: #000000 !important;
-            font-size: 1rem !important;
-            font-weight: 700 !important;
-        }
-        
-        /* 4. Fix Input Fields Background & Text */
-        div[data-baseweb="select"] > div, .stNumberInput input {
-            background-color: #f0f2f6 !important;
-            color: #000000 !important;
-            border-color: #cccccc !important;
-        }
-        
-        /* 5. Fix Buttons (High Contrast) */
-        .stButton > button {
-            background-color: #0e1117 !important; /* Dark background */
-            color: #ffffff !important; /* White text */
-            border: none !important;
-        }
-        .stButton > button:hover {
-            background-color: #262730 !important;
-            color: #ffffff !important;
-        }
-        
-        /* 6. Fix Expander Headers */
-        .streamlit-expanderHeader {
-            background-color: #f0f2f6 !important;
-            color: #000000 !important;
+            font-size: 16px !important;
             font-weight: bold !important;
         }
-
-        /* 7. Fix Progress Text */
-        .stMarkdown h4 {
-            color: #0068c9 !important; /* Streamlit Blue */
-            font-weight: 800 !important;
+        /* Ensure dropdown text is visible */
+        .stSelectbox div[data-baseweb="select"] > div {
+            color: #000000 !important;
+            background-color: #f0f2f6 !important;
         }
-
-        /* 8. Cover Box Styling */
+        /* Ensure number input text is visible */
+        .stNumberInput input {
+            color: #000000 !important;
+            background-color: #f0f2f6 !important;
+        }
+        /* Status Text Style */
+        .stMarkdown h4 {
+            color: #0000FF !important;
+        }
+        /* All Text Black */
+        body, p, div, span, td, th {
+            color: #000000 !important;
+        }
+        .block-container { padding-top: 60px !important; padding-bottom: 40px; max-width: 1350px; }
         .cover-box {
             border-radius: 24px;
             padding: 24px 32px;
@@ -657,9 +648,18 @@ def main_gui():
             background: linear-gradient(135deg, #dff3ff 0%, #ffffff 50%, #f5fff7 100%);
             box-shadow: 0 6px 14px rgba(0,0,0,0.06);
         }
-        /* Hide Default Header */
+        .cover-top-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+        .cover-badge {
+            display: inline-block; padding: 10px 24px; border-radius: 999px;
+            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 16px;
+            margin-bottom: 10px; margin-left: -12px;
+        }
+        .cover-title { font-size: 36px; font-weight: 800; color: #111111; margin: 4px 0 10px 0; }
+        .cover-sub-main { font-size: 20px; font-weight: 700; color: #222222; }
+        .cover-sub-sub { font-size: 18px; font-weight: 600; color: #333333; }
+        .cover-logo-area { text-align: right; font-size: 15px; color: #444444; }
+        .cover-logo-text { line-height: 1.3; margin-bottom: 6px; }
         header {visibility: hidden;}
-        .block-container { padding-top: 60px !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -668,16 +668,19 @@ def main_gui():
     st.markdown(
         """
         <div class="cover-box">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div class="cover-top-row">
                 <div>
-                    <div style="display: inline-block; padding: 10px 24px; border-radius: 999px; background: #e5f9e8; color: #176a3a; font-weight: 700; margin-bottom: 10px;">2025 제1회 Google-아주대학교</div>
-                    <div style="font-size: 36px; font-weight: 800; color: #111111; margin: 4px 0 10px 0;">AI 기반 ALD 공정 최적화 시스템</div>
-                    <div style="font-size: 20px; font-weight: 700; color: #222222;">AI 융합 캡스톤 디자인 대회</div>
-                    <div style="font-size: 18px; font-weight: 600; color: #333333;">최종성과발표회</div>
+                    <div class="cover-badge">2025 제1회 Google-아주대학교</div>
+                    <div class="cover-title">AI 기반 ALD 공정 최적화 시스템</div>
+                    <div class="cover-sub-main">AI 융합 캡스톤 디자인 대회</div>
+                    <div class="cover-sub-sub">최종성과발표회</div>
                 </div>
-                <div style="text-align: right;">
-                    <div style="line-height: 1.3; margin-bottom: 6px; font-size: 15px; color: #444444;">Google Developer Student Clubs<br>Ajou University</div>
-                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png" style="height:40px;">
+                <div class="cover-logo-area">
+                    <div class="cover-logo-text">
+                        Google Developer Student Clubs<br>Ajou University
+                    </div>
+                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png"
+                         style="height:40px;">
                 </div>
             </div>
         </div>
@@ -685,12 +688,12 @@ def main_gui():
         unsafe_allow_html=True,
     )
     
-    # Initialize Containers
+    # Initialize Status Container
     status_container = st.empty()
     progress_container = st.empty()
 
-    # Session State for Persistence
     if 'optimizer' not in st.session_state:
+        # Manual progress update for the first run (uncached visual)
         def update_p(val): progress_container.progress(val)
         def update_s(txt): status_container.markdown(f"<h4>🔄 {txt}</h4>", unsafe_allow_html=True)
         
@@ -709,7 +712,7 @@ def main_gui():
             st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
             st.stop()
     
-    # Main Input Area
+    # Main Expander
     with st.expander("🎯 공정 목표 설정 (펼치기/접기)", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -726,8 +729,9 @@ def main_gui():
                 recipe, pred, phy, res = optimizer.optimize(user_input)
                 st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    # Reset in Sidebar
+    # Reset Button
     if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
+        st.cache_resource.clear()
         st.session_state.pop('optimizer', None)
         st.rerun()
 
