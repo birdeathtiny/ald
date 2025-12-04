@@ -1,4 +1,16 @@
-# --- 0. 기본 라이브러리 및 Streamlit 임포트 ---
+# ==============================================================================
+# 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
+# (AI-Driven ALD Process Optimization System)
+# 
+# [Final Version vFinal_Hybrid: R2 Weighted Hybrid SC Model]
+# 1. Hybrid Logic Applied:
+#    - Final SC = (R2 * AI_SC) + ((1 - R2) * Phys_SC)
+#    - R2 score represents the confidence of the AI model.
+#    - Remaining uncertainty is compensated by the ideal Physical model.
+# 2. Parameters Locked: XGB(175), RF(130), MLP(100/256).
+# 3. UI/UX: All visibility & mobile fixes included.
+# ==============================================================================
+
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -6,18 +18,50 @@ import sys
 import os
 import torch
 import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
+import seaborn as sns
+import matplotlib.ticker as ticker
+from scipy.ndimage import gaussian_filter1d
+from scipy.interpolate import interp1d
+import textwrap
+import time
+
+# 머신러닝 라이브러리
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, PolynomialFeatures
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
-from torch.utils.data import TensorDataset, DataLoader
-from typing import Dict, Any, List, Tuple
 from scipy.optimize import minimize
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor
-import itertools
+from sklearn.neural_network import MLPRegressor 
+from sklearn.multioutput import MultiOutputRegressor
+import xgboost as xgb
+import shap
 
-# --- 1. 물리/화학 상수 테이블 정의 ---
+# 모바일/클라우드 CPU 최적화
+torch.set_num_threads(1)
+
+# ------------------------------------------------------------------------------
+# 1. 환경 설정 및 상수 정의
+# ------------------------------------------------------------------------------
+
+import platform
+from matplotlib import font_manager, rc
+plt.rcParams['axes.unicode_minus'] = False
+
+# 폰트 설정
+if platform.system() == 'Darwin':
+    rc('font', family='AppleGothic')
+elif platform.system() == 'Windows':
+    try:
+        path = "c:/Windows/Fonts/malgun.ttf"
+        font_name = font_manager.FontProperties(fname=path).get_name()
+        rc('font', family=font_name)
+    except:
+        pass 
+
 N_A = 6.022e23
 k_B = 1.38e-23
 
@@ -29,526 +73,784 @@ PRECURSOR_CONSTANTS = {
 }
 
 COST_WEIGHTS = {
-    "gpc": 10000.0,
-    "roughness": 10.0
+    "gpc": 10000.0,     
+    "roughness": 10.0, 
+    "uniformity": 50.0  
 }
 
-# --- 2. AI 모델 클래스 정의 ---
-class ALDRegressor_Optimized(nn.Module):
-    def __init__(self, input_size, output_size, dropout_rate):
-        super(ALDRegressor_Optimized, self).__init__()
-        self.output_size = output_size
+# ------------------------------------------------------------------------------
+# 2. Deep Learning Model Definition
+# ------------------------------------------------------------------------------
+
+class ALDRegressor(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(ALDRegressor, self).__init__()
+        # Lightweight Architecture for Speed
         self.layer_stack = nn.Sequential(
-            nn.Linear(input_size, 128),
+            nn.Linear(input_size, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128, 64),
+            nn.Dropout(0.1),
+            
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(64, output_size)
+            
+            nn.Linear(32, output_size)
         )
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
     def forward(self, x):
         return self.layer_stack(x)
 
-# --- 3. ALD 최적화 메인 클래스 ---
+# ------------------------------------------------------------------------------
+# 3. Main Optimization Logic Class
+# ------------------------------------------------------------------------------
+
 class ALDOptimizer:
     
     def __init__(self, file_path: str, mode: str = "cli"):
         self.mode = mode
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # 하이퍼파라미터 정의 (튜닝 결과 반영)
-        self.final_learning_rate = 0.00195
-        self.final_dropout_rate = 0.28
-        self.final_batch_size = 16
-        self.final_epochs = 500
-        self.VALIDATION_SPLIT = 0.2
-        self.PATIENCE = 30
-        self.WEIGHT_DECAY = 1e-5
-        self.BEST_MODEL_PATH = 'best_ald_model.pth'
-        self.DEFAULT_GPC_GUESS_A = 1.0 
-        self.model_comparison_results = {}
-        self.performance_df = None
-
-        # 스케일러 및 모델 정의
-        self.X_scaler = StandardScaler()
-        self.Y_scaler = StandardScaler()
-        self.final_model = None
-        self.ALL_INPUT_FEATURES_ORDERED = []
-        self.ALL_OUTPUT_FEATURES_ORDERED = []
+        # [LOCKED PARAMETERS]
+        self.learning_rate = 0.01 
+        self.batch_size = 256       # Full Batch (Speed Hack)
+        self.epochs = 100           # Locked: 100
+        self.best_model_path = 'best_ald_mlp_model.pth'
+        self.default_gpc_guess = 1.0 
+        self.sc_r2_score = 0.95     # Default R2 score (will be updated after training)
         
-        # 데이터 로드, 전처리 및 학습
+        self.models = {'mlp': None, 'xgboost': None, 'rf': None}
+        self.model_weights = {'mlp': 0.33, 'xgboost': 0.33, 'rf': 0.33}
+        
+        self.poly = PolynomialFeatures(degree=2, include_bias=False, interaction_only=False)
+        self.X_scaler = MinMaxScaler()
+        self.Y_scaler = MinMaxScaler()
+        self.X_imputer = KNNImputer(n_neighbors=5)
+        self.Y_imputer = KNNImputer(n_neighbors=5)
+        
+        self.all_input_cols = []
+        self.all_output_cols = []
+        
+        # UI Placeholders (Internal handling)
+        self.status_container = None
+        self.progress_bar = None
+        
+        if self.mode == 'gui':
+            self.status_container = st.empty()
+            self.progress_bar = st.progress(0)
+        
+        # Pipeline Start
+        self._update_ui(0.0, "데이터 로드 및 전처리 중...")
         df_encoded = self._load_and_preprocess(file_path)
         self._prepare_datasets(df_encoded)
         
-        self._hyperparameter_search() 
-        self._compare_with_rf()
-        self._train_model()
+        self._update_ui(0.1, "AI 모델 학습 시작...")
+        self.performance_df = self._train_ensemble_models()
         
-        # 최종 모델 평가 결과를 저장
-        _, _, _, _ = self._evaluate_model(torch.from_numpy(self.X_test_scaled).float(), torch.from_numpy(self.Y_test_scaled).float())
+        self._update_ui(1.0, "학습 완료! 시스템 준비됨.")
+        time.sleep(0.5)
+        
+        # Clear UI elements
+        if self.mode == 'gui':
+            self.status_container.empty()
+            self.progress_bar.empty()
+
+    def _update_ui(self, value, text):
+        if self.mode == "gui":
+            self.progress_bar.progress(min(value, 1.0))
+            self.status_container.markdown(f"<h4 style='color:blue; font-weight:bold;'>🔄 {text}</h4>", unsafe_allow_html=True)
 
     def _load_and_preprocess(self, file_path: str) -> pd.DataFrame:
         try:
-            # 절대 경로가 포함된 file_path를 사용하여 로드 시도
             df = pd.read_csv(file_path, encoding='CP949')
         except Exception as e:
-            msg = f"\n[치명적 오류] 파일 로드 실패: {file_path}. 오류: {e}"
-            if self.mode == "cli": print(msg); sys.exit(1)
-            else: raise FileNotFoundError(f"'{file_path}' 파일을 찾거나 로드할 수 없습니다. 경로를 확인하세요.")
-        
+            df = pd.DataFrame(columns=['Precursor', 'Thickness (nm)']) 
+            
         df.replace('-', np.nan, inplace=True)
-        cols_to_convert = [
+        
+        numeric_cols = [
             'Precursor_Pulse Time (s)', 'Co-reactant_Pulse Time (s)', 'Cycles (n)', 'Pressure (torr)',
             'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)', 'Precursor Flow Rate (cm3/min)',
             'Co-reactant Flow Rate (cm3/min)', 'Thickness (nm)', 'Surface Roughness (RMS, nm)',
             'Uniformity (%)', 'Step Coverage (sc, %)', 'Density (g/cm3)', 'GPC (A/cycle)',
-            'Aspect Ratio (AR)', 'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)',
-            'Breakdown Field (MV/cm)'
+            'Aspect Ratio (AR)', 'Dielectric Constant (ε)', 'Breakdown Field (MV/cm)'
         ]
-        for col in cols_to_convert:
+        for col in numeric_cols:
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
 
         if 'Co-reactant' in df.columns:
-            df['Co-reactant'] = df['Co-reactant'].replace({'O3?': 'O3', 'H2O (Implied)': 'H2O'})
-            df['Co-reactant'] = df['Co-reactant'].replace({'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'})
+            df['Co-reactant'] = df['Co-reactant'].replace({
+                'O3?': 'O3', 'H2O (Implied)': 'H2O',
+                'O3??plasma': 'O3_Plasma', 'O2??plasma': 'O2_Plasma', 'O2 plasma': 'O2_Plasma'
+            })
         
-        cols_to_drop_high_nan = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)']
-        existing_cols_to_drop = [c for c in cols_to_drop_high_nan if c in df.columns]
-        df_processed = df.drop(columns=existing_cols_to_drop)
+        drop_cols = ['Precursor Flow Rate (cm3/min)', 'Co-reactant Flow Rate (cm3/min)', 'Leakage Current Density (A/cm2)']
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+        if '순서' in df.columns: df = df.drop(columns=['순서'])
         
-        categorical_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
-        existing_cat_cols = [c for c in categorical_cols if c in df_processed.columns]
-        if '순서' in df_processed.columns: df_processed = df_processed.drop(columns=['순서'])
+        cat_cols = ['Precursor', 'Co-reactant', 'Purge Gas']
+        df_encoded = pd.get_dummies(df, columns=[c for c in cat_cols if c in df.columns], dummy_na=False)
         
-        df_encoded = pd.get_dummies(df_processed, columns=existing_cat_cols, dummy_na=False)
         return df_encoded
 
-    def _prepare_datasets(self, df_encoded: pd.DataFrame):
+    def _prepare_datasets(self, df: pd.DataFrame):
         target_cols = [
             'Thickness (nm)', 'Surface Roughness (RMS, nm)', 'Uniformity (%)',
             'Density (g/cm3)', 'GPC (A/cycle)',
-            'Leakage Current Density (A/cm2)', 'Dielectric Constant (ε)',
-            'Breakdown Field (MV/cm)', 'Step Coverage (sc, %)'
+            'Dielectric Constant (ε)', 'Breakdown Field (MV/cm)', 'Step Coverage (sc, %)'
         ]
-        cols_to_ignore_for_ai = ['Aspect Ratio (AR)']
-        available_target_cols = [col for col in target_cols if col in df_encoded.columns]
+        ignore_cols = [] 
         
-        cols_to_drop = available_target_cols + [c for c in cols_to_ignore_for_ai if c in df_encoded.columns]
-        self.ALL_INPUT_FEATURES_ORDERED = df_encoded.drop(columns=cols_to_drop).columns.tolist()
-        self.ALL_OUTPUT_FEATURES_ORDERED = available_target_cols
-
-        X = df_encoded[self.ALL_INPUT_FEATURES_ORDERED].values
-        Y = df_encoded[self.ALL_OUTPUT_FEATURES_ORDERED].values
+        available_targets = [c for c in target_cols if c in df.columns]
+        drop_for_inputs = available_targets + [c for c in ignore_cols if c in df.columns]
         
-        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-        X_imputer = KNNImputer(n_neighbors=5); X_train_imputed = X_imputer.fit_transform(X_train); X_test_imputed = X_imputer.transform(X_test)
-        Y_imputer = KNNImputer(n_neighbors=5); Y_train_imputed = Y_imputer.fit_transform(Y_train); self.Y_test_unscaled = Y_imputer.transform(Y_test)
+        self.all_input_cols = df.drop(columns=drop_for_inputs).columns.tolist()
+        self.all_output_cols = available_targets
+
+        X_raw = df[self.all_input_cols].values
+        Y_raw = df[self.all_output_cols].values
         
-        self.X_test_scaled = self.X_scaler.fit_transform(X_test_imputed)
-        self.Y_test_scaled = self.Y_scaler.fit_transform(self.Y_test_unscaled)
+        X_imp = self.X_imputer.fit_transform(X_raw)
+        Y_imp = self.Y_imputer.fit_transform(Y_raw)
         
-        self.X_train_scaled = self.X_scaler.fit_transform(X_train_imputed)
-        self.Y_train_scaled = self.Y_scaler.fit_transform(Y_train_imputed)
-        self.Y_train_unscaled = Y_train_imputed
+        # Physics Data
+        X_phys, Y_phys = self._generate_physics_data(X_imp, Y_imp, n_samples=200)
         
-        X_train_final_idx, X_val_idx, _, _ = train_test_split(
-            np.arange(self.X_train_scaled.shape[0]), np.arange(self.Y_train_scaled.shape[0]), test_size=self.VALIDATION_SPLIT, random_state=42
-        )
-        self.X_train_final = self.X_train_scaled[X_train_final_idx]
-        self.Y_train_final = self.Y_train_scaled[X_train_final_idx]
-        self.X_val = self.X_train_scaled[X_val_idx]
-        self.Y_val = self.Y_train_scaled[X_val_idx]
-
-        self.INPUT_SIZE = self.X_train_scaled.shape[1]
-        self.OUTPUT_SIZE = self.Y_train_scaled.shape[1]
-
-    def _hyperparameter_search(self):
-        LR_CANDIDATES = [0.001, 0.002]; DO_CANDIDATES = [0.2, 0.3]; best_val_loss = float('inf')
+        X_combined = np.vstack([X_imp, X_phys])
+        Y_combined = np.vstack([Y_imp, Y_phys])
         
-        for lr, do in itertools.product(LR_CANDIDATES, DO_CANDIDATES):
-            model_temp = ALDRegressor_Optimized(self.INPUT_SIZE, self.OUTPUT_SIZE, do)
-            criterion = nn.MSELoss()
-            optimizer = torch.optim.Adam(model_temp.parameters(), lr=lr)
-
-            X_val_tensor = torch.from_numpy(self.X_val).float(); Y_val_tensor = torch.from_numpy(self.Y_val).float()
-            X_train_tensor = torch.from_numpy(self.X_train_final).float(); Y_train_tensor = torch.from_numpy(self.Y_train_final).float()
-
-            train_dataset = TensorDataset(X_train_tensor, Y_train_tensor)
-            train_loader = DataLoader(train_dataset, batch_size=self.final_batch_size, shuffle=True)
-            
-            for epoch in range(50):
-                model_temp.train()
-                for inputs, targets in train_loader:
-                    optimizer.zero_grad(); outputs = model_temp(inputs); loss = criterion(outputs, targets); loss.backward(); optimizer.step()
-
-            model_temp.eval()
-            with torch.no_grad():
-                val_loss = criterion(model_temp(X_val_tensor), Y_val_tensor).item()
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                self.final_learning_rate = lr
-                self.final_dropout_rate = do
-
-    def _compare_with_rf(self):
-        rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        X_combined = np.concatenate([self.X_train_final, self.X_val])
-        Y_unscaled_combined = self.Y_scaler.inverse_transform(np.concatenate([self.Y_train_final, self.Y_val]))
-
-        rf_model.fit(X_combined, Y_unscaled_combined)
-        Y_pred_rf = rf_model.predict(self.X_test_scaled)
-
-        r2_rf = r2_score(self.Y_test_unscaled, Y_pred_rf, multioutput='raw_values')
-        rmse_rf = np.sqrt(mean_squared_error(self.Y_test_unscaled, Y_pred_rf, multioutput='raw_values'))
+        # Augmentation
+        X_aug, Y_aug = self._augment_data(X_combined, Y_combined, noise=0.005, multiplier=5)
         
-        self.model_comparison_results['RF'] = {
-            'R2_mean': r2_rf.mean().round(4), 
-            'RMSE_mean': rmse_rf.mean().round(4), 
-            'R2_GPC': r2_rf[self.ALL_OUTPUT_FEATURES_ORDERED.index('GPC (A/cycle)')].round(4)
-        }
-
-    def _train_model(self):
-        X_train_tensor = torch.from_numpy(self.X_train_final).float(); Y_train_tensor = torch.from_numpy(self.Y_train_final).float()
-        X_val_tensor = torch.from_numpy(self.X_val).float(); Y_val_tensor = torch.from_numpy(self.Y_val).float()
-        train_dataset = TensorDataset(X_train_tensor, Y_train_tensor); val_dataset = TensorDataset(X_val_tensor, Y_val_tensor)
-        train_loader = DataLoader(train_dataset, batch_size=self.final_batch_size, shuffle=True); val_loader = DataLoader(val_dataset, batch_size=self.final_batch_size, shuffle=False)
+        X_temp, self.X_test, Y_temp, self.Y_test = train_test_split(X_aug, Y_aug, test_size=0.1, random_state=42)
+        self.X_train, self.X_val, self.Y_train, self.Y_val = train_test_split(X_temp, Y_temp, test_size=0.15, random_state=42)
         
-        model = ALDRegressor_Optimized(self.INPUT_SIZE, self.OUTPUT_SIZE, self.final_dropout_rate)
-        criterion = nn.MSELoss(); optimizer = torch.optim.Adam(model.parameters(), lr=self.final_learning_rate, weight_decay=self.WEIGHT_DECAY)
-        best_val_loss = float('inf'); patience_counter = 0
-
-        for epoch in range(self.final_epochs):
-            model.train()
-            for inputs, targets in train_loader:
-                optimizer.zero_grad(); outputs = model(inputs); loss = criterion(outputs, targets); loss.backward(); optimizer.step()
-            
-            model.eval(); val_loss = 0.0
-            with torch.no_grad():
-                for inputs, targets in val_loader:
-                    outputs = model(inputs); loss = criterion(outputs, targets); val_loss += loss.item()
-            val_loss /= len(val_loader)
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss; torch.save(model.state_dict(), self.BEST_MODEL_PATH); patience_counter = 0
-            else:
-                patience_counter += 1
-            if patience_counter >= self.PATIENCE: break
+        # No Poly
+        self.X_train_sc = self.X_scaler.fit_transform(self.X_train)
+        self.X_val_sc = self.X_scaler.transform(self.X_val)
+        self.X_test_sc = self.X_scaler.transform(self.X_test)
         
-        model.load_state_dict(torch.load(self.BEST_MODEL_PATH)); model.eval()
-        self.final_model = model
-        if os.path.exists(self.BEST_MODEL_PATH): os.remove(self.BEST_MODEL_PATH)
+        self.Y_train_sc = self.Y_scaler.fit_transform(self.Y_train)
+        self.Y_val_sc = self.Y_scaler.transform(self.Y_val)
         
-        self.model_comparison_results['MLP'] = {'R2_mean': 0, 'RMSE_mean': 0, 'R2_GPC': 0}
+        self.input_dim = self.X_train_sc.shape[1]
+        self.output_dim = self.Y_train_sc.shape[1]
 
-    def _evaluate_model(self, X_test_tensor, Y_test_tensor):
-        if self.final_model is None: return 0.0, {}, {}, {}
-
-        self.final_model.eval()
-        with torch.no_grad(): Y_pred_scaled_tensor = self.final_model(X_test_tensor)
-            
-        Y_pred_unscaled = self.Y_scaler.inverse_transform(Y_pred_scaled_tensor.numpy())
-        test_rmse = np.sqrt(mean_squared_error(self.Y_test_unscaled, Y_pred_unscaled))
-        R2_scores = r2_score(self.Y_test_unscaled, Y_pred_unscaled, multioutput='raw_values')
-        RMSE_scores = np.sqrt(mean_squared_error(self.Y_test_unscaled, Y_pred_unscaled, multioutput='raw_values'))
+    def _generate_physics_data(self, X_real, Y_real, n_samples=200):
+        X_synth = []
+        Y_synth = []
         
-        Y_test_avg = np.mean(self.Y_test_unscaled, axis=0)
-        RRMSE_scores = (RMSE_scores / (Y_test_avg + 1e-8)) * 100
-        
-        R2_dict = dict(zip(self.ALL_OUTPUT_FEATURES_ORDERED, R2_scores.round(4)))
-        RMSE_dict = dict(zip(self.ALL_OUTPUT_FEATURES_ORDERED, RMSE_scores.round(4)))
-        RRMSE_dict = dict(zip(self.ALL_OUTPUT_FEATURES_ORDERED, RRMSE_scores.round(2)))
-        
-        self.model_comparison_results['MLP'] = {
-            'R2_mean': R2_scores.mean().round(4), 
-            'RMSE_mean': test_rmse.round(4), 
-            'R2_GPC': R2_dict['GPC (A/cycle)']
-        }
-        
-        self.performance_df = pd.DataFrame({'RMSE': RMSE_dict, 'R^2': R2_dict, 'RRMSE (%)': RRMSE_dict})
-
-        return test_rmse, RMSE_dict, R2_dict, RRMSE_dict
-
-    # --- 물리 모델 및 최적화 함수 ---
-    @staticmethod
-    def _calculate_physical_parameters(T_celsius, P_torr, precursor_name, L_feature_m):
-        const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
-        d_precursor_m = const["diameter_m"]; T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
-        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d_precursor_m**2 * P_Pa)
-        Kn = lambda_m / L_feature_m
-        return lambda_m, Kn
-
-    @staticmethod
-    def _calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
-        const = PRECURSOR_CONSTANTS.get(precursor_name, PRECURSOR_CONSTANTS["TMA"])
-        d = const["diameter_m"]; M_kg = const["mass_g_mol"] / 1000.0 / N_A
-        T_K = T_celsius + 273.15; P_Pa = P_torr * 133.322
-        L_m = AR_value * CD_m
-        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M_kg))
-        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
-        D_A = (1.0 / 3.0) * lambda_m * v_avg
-        D_Kn = (1.0 / 3.0) * v_avg * CD_m
-        D_eff = 1.0 / ((1.0 / (D_A + 1e-30)) + (1.0 / (D_Kn + 1e-30)))
-        lambda_pen = np.sqrt(D_eff * Pulse_Time_s + 1e-30)
-        phi = L_m / (lambda_pen + 1e-30)
-        
-        if phi < 1.0: SC_fraction = 1.0 / (1.0 + phi); mode = "Reaction Limited (RDS, φ < 1)"
-        else: SC_fraction = np.exp(-phi); mode = "Diffusion Limited (RDS, φ ≥ 1)"
-            
-        return float(np.clip(SC_fraction * 100.0, 0.0, 100.0)), float(phi), mode
-
-    def _calculate_physics_sc(self, P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m):
-        sc, _, _ = self._calculate_physics_sc_details(P_torr, T_celsius, Pulse_Time_s, AR_value, precursor_name, CD_m)
-        return sc
-
-    def _create_model_input(self, recipe_params, precursor_name, co_reactant_name, purge_gas_name) -> pd.DataFrame:
-        input_df = pd.DataFrame(columns=self.ALL_INPUT_FEATURES_ORDERED); input_df.loc[0] = 0.0
-        for key, value in recipe_params.items():
-            if key in input_df.columns: input_df.at[0, key] = value
-        
-        if f"Precursor_{precursor_name}" in input_df.columns: input_df.at[0, f"Precursor_{precursor_name}"] = 1.0
-        if f"Co-reactant_{co_reactant_name}" in input_df.columns: input_df.at[0, f"Co-reactant_{co_reactant_name}"] = 1.0
-        if f"Purge Gas_{purge_gas_name}" in input_df.columns: input_df.at[0, f"Purge Gas_{purge_gas_name}"] = 1.0
-        return input_df
-
-    def _predict_from_recipe(self, recipe_params, precursor_name, co_reactant_name, purge_gas_name) -> pd.Series:
-        input_df = self._create_model_input(recipe_params, precursor_name, co_reactant_name, purge_gas_name)
-        X_scaled = self.X_scaler.transform(input_df.values); X_tensor = torch.from_numpy(X_scaled).float()
-        self.final_model.eval()
-        with torch.no_grad(): Y_pred_scaled_tensor = self.final_model(X_tensor)
-        Y_pred_unscaled = self.Y_scaler.inverse_transform(Y_pred_scaled_tensor.numpy())[0]
-        return pd.Series(Y_pred_unscaled, index=self.ALL_OUTPUT_FEATURES_ORDERED).round(4)
-
-    def _constraint_sc(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
-        target_ar = user_input["Target AR"]
-        CD_m = user_input["CD (nm)"] * 1e-9 
-        
-        TARGET_SC_MIN = 98.0 if target_ar <= 5 else 90.0 if target_ar <= 15 else 85.0
-        
-        phys_sc = self._calculate_physics_sc(x[1], x[0], x[2], target_ar, user_input["Precursor"], CD_m)
-        
-        return phys_sc - TARGET_SC_MIN
-
-    def _objective_function(self, x, user_input, co_reactant_name, purge_gas_name, cost_weights, fixed_cycles_n) -> float:
-        recipe_params = {
-            "Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
-            "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4],
-            "Cycles (n)": fixed_cycles_n, "Co-reactant_Pulse Time (s)": x[2]
-        }
         try:
-            pred = self._predict_from_recipe(recipe_params, user_input["Precursor"], co_reactant_name, purge_gas_name)
-        except: return 1e9
-        
-        target_gpc = (user_input["Thickness (nm)"] * 10) / (fixed_cycles_n + 1e-6)
-        
-        cost = (cost_weights["gpc"] * (pred.get('GPC (A/cycle)', 0) - target_gpc)**2) + \
-               (cost_weights["roughness"] * (pred.get('Surface Roughness (RMS, nm)', 10)/5.0)**2)
-        
-        return cost
-
-    def generate_optimal_recipe(self, user_input: Dict[str, Any], silent: bool = False):
-        precursor = user_input["Precursor"]; thickness = user_input["Thickness (nm)"]
-        co_reactant = 'H2O' if precursor in ['TMA', 'TDMAH'] else 'O3'; purge_gas = "N2"
-        initial_cycles = max(10, int(round((thickness * 10) / self.DEFAULT_GPC_GUESS_A)))
-        
-        bounds = [(150, 400), (0.01, 1.0), (0.05, 2.0), (1.0, 10.0), (50, 500)]
-        initial_guess = [np.random.uniform(l, h) for l, h in bounds]
-
-        args = (user_input, co_reactant, purge_gas, COST_WEIGHTS, initial_cycles)
-        
-        result = minimize(self._objective_function, initial_guess, args=args, method='SLSQP', bounds=bounds,
-                          constraints={'type': 'ineq', 'fun': self._constraint_sc, 'args': args}, 
-                          options={'maxiter': 100, 'eps': 1e-6, 'ftol': 1e-7})
-        
-        x = result.x
-        
-        check_params = {"Temperature (c)": x[0], "Pressure (torr)": x[1], "Precursor_Pulse Time (s)": x[2],
-                        "Purge Time (s)": x[3], "Purge Gas Flow Rate (cm3/min)": x[4], "Cycles (n)": initial_cycles, "Co-reactant_Pulse Time (s)": x[2]}
-        check_res = self._predict_from_recipe(check_params, precursor, co_reactant, purge_gas)
-        final_gpc = check_res.get('GPC (A/cycle)', 1.0); final_gpc = max(0.001, final_gpc)
-        final_cycles = max(10, int(round((thickness * 10) / final_gpc)))
-
-        final_params = check_params.copy(); final_params["Cycles (n)"] = final_cycles
-        final_pred = self._predict_from_recipe(final_params, precursor, co_reactant, purge_gas)
-        final_pred['Thickness (nm)'] = (final_gpc * final_cycles) / 10.0 
-
-        opt_recipe = {"Precursor": precursor, "Co-reactant": co_reactant, "Temperature (c)": round(x[0], 2), "Pressure (torr)": round(x[1], 3),
-                      "Cycles (n)": final_cycles, "Precursor Pulse Time (s)": round(x[2], 3), "Co-reactant Pulse Time (s)": round(x[2], 3),
-                      "Purge Time (s)": round(x[3], 2), "Purge Gas Flow Rate (cm3/min)": round(x[4], 0), "Purge Gas": purge_gas}
-        
-        sc_val, phi, mode = self._calculate_physics_sc_details(x[1], x[0], x[2], user_input["Target AR"], precursor, user_input["CD (nm)"]*1e-9)
-        lambda_m, Kn = self._calculate_physical_parameters(x[0], x[1], precursor, user_input["CD (nm)"]*1e-9)
-        valid_data = {"Mean Free Path (λ) [m]": f"{lambda_m:.2e}", "Knudsen Number (Kn)": f"{Kn:.2f}", 
-                      "Thiele Modulus (φ)": f"{phi:.4f}", "Transport Mode": mode, "SC (Full Model)": f"{sc_val:.4f} %"}
-                      
-        stats = {"Optimization Success": result.success, "Message": result.message, "Iterations": result.nit, "Final Cost": f"{result.fun:.6f}"}
-
-        return opt_recipe, final_pred, valid_data, stats
-
-    def simulate_target_sweep(self, base_user_input, target_param_name, range_values):
-        results = []
-        for val in range_values:
-            current_input = base_user_input.copy()
-            current_input[target_param_name] = val
+            idx_pulse = [i for i, c in enumerate(self.all_input_cols) if 'Pulse Time' in c][0]
+            idx_temp = [i for i, c in enumerate(self.all_input_cols) if 'Temperature' in c][0]
+            idx_press = [i for i, c in enumerate(self.all_input_cols) if 'Pressure' in c][0]
+            idx_ar = [i for i, c in enumerate(self.all_input_cols) if 'Aspect Ratio' in c][0]
             
-            opt_recipe, pred_results, _, _ = self.generate_optimal_recipe(current_input, silent=True)
+            idx_sc = self.all_output_cols.index('Step Coverage (sc, %)')
+            idx_gpc = self.all_output_cols.index('GPC (A/cycle)')
+        except:
+            return X_real, Y_real
+
+        means = np.mean(X_real, axis=0)
+        stds = np.std(X_real, axis=0)
+        ar_real_vals = X_real[:, idx_ar]
+        
+        for _ in range(n_samples):
+            new_x = means + np.random.normal(0, 1, size=len(means)) * stds
+            pulse_val = np.random.uniform(0.05, 2.0)
+            new_x[idx_pulse] = pulse_val
+            ar_val = np.random.choice(ar_real_vals) 
+            new_x[idx_ar] = ar_val
+
+            temp_c = new_x[idx_temp]
+            press_torr = new_x[idx_press]
             
-            phys_sc = self._calculate_physics_sc(
-                opt_recipe['Pressure (torr)'],
-                opt_recipe['Temperature (c)'],
-                opt_recipe['Precursor Pulse Time (s)'],
-                current_input['Target AR'],
-                current_input['Precursor'],
-                current_input['CD (nm)'] * 1e-9
-            )
+            sc_phys, _, _, _, _ = self._calc_physics(temp_c, press_torr, pulse_val, ar_val, "TMA", 100e-9)
+            
+            sat_factor = pulse_val / (0.2 + pulse_val)
+            press_factor = press_torr / (0.1 + press_torr)
+            temp_factor = 1.0 + 0.0005 * (temp_c - 250)
+            gpc_phys = 1.1 * sat_factor * press_factor * temp_factor
+            
+            new_y = np.mean(Y_real, axis=0)
+            new_y[idx_sc] = sc_phys
+            new_y[idx_gpc] = gpc_phys
+            
+            X_synth.append(new_x)
+            Y_synth.append(new_y)
+            
+        return np.array(X_synth), np.array(Y_synth)
 
-            row = {target_param_name: val}
-            row.update(opt_recipe)
-            row.update(pred_results.to_dict())
-            row['Physics SC (%)'] = phys_sc
-            results.append(row)
-        return pd.DataFrame(results)
+    def _augment_data(self, X, Y, noise=0.01, multiplier=5):
+        X_aug, Y_aug = [X], [Y]
+        for _ in range(multiplier):
+            n = np.random.normal(0, noise, X.shape)
+            X_aug.append(X + n * np.std(X, axis=0))
+            Y_aug.append(Y)
+        return np.vstack(X_aug), np.vstack(Y_aug)
 
+    def _train_ensemble_models(self):
+        # 1. XGBoost (175 Trees)
+        self._update_ui(0.2, "XGBoost (175 Trees) 학습 중... [1/3]")
+        xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
+        self.models['xgboost'] = MultiOutputRegressor(xgb_model)
+        self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
+        
+        # 2. Random Forest (130 Trees)
+        self._update_ui(0.5, "Random Forest (130 Trees) 학습 중... [2/3]")
+        rf_model = RandomForestRegressor(n_estimators=130, max_depth=None, random_state=42, n_jobs=-1)
+        self.models['rf'] = rf_model
+        self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
+        
+        # 3. PyTorch MLP (100 Epochs)
+        self._update_ui(0.75, "Deep Learning (100 Epochs) 학습 중... [3/3]")
+        self._train_pytorch_mlp()
+        
+        self._update_ui(0.9, "모델 가중치 최적화 중...")
+        self._optimize_weights()
+        
+        return self._evaluate_ensemble()
 
-# ==========================================
-# 🌐 Streamlit GUI 모드 실행 함수
-# ==========================================
+    def _train_pytorch_mlp(self):
+        X_t = torch.FloatTensor(self.X_train_sc).to(self.device)
+        Y_t = torch.FloatTensor(self.Y_train_sc).to(self.device)
+        
+        dataset = TensorDataset(X_t, Y_t)
+        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        
+        self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
+        optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
+        
+        loss_weights = torch.ones(self.output_dim).to(self.device)
+        try:
+            uni_idx = self.all_output_cols.index('Uniformity (%)')
+            loss_weights[uni_idx] = 2.0 
+        except: pass
+        
+        for epoch in range(self.epochs):
+            self.models['mlp'].train()
+            for bx, by in loader:
+                bx, by = bx.to(self.device), by.to(self.device)
+                optimizer.zero_grad()
+                pred = self.models['mlp'](bx)
+                loss = torch.mean(loss_weights * (pred - by) ** 2)
+                loss.backward()
+                optimizer.step()
+            
+            if epoch % 20 == 0:
+                self._update_ui(0.75 + (0.20 * (epoch / self.epochs)), f"Deep Learning 진행 중... Epoch {epoch}/{self.epochs}")
+        
+        if os.path.exists(self.best_model_path):
+            os.remove(self.best_model_path)
+
+    def _optimize_weights(self):
+        p_xgb = self.models['xgboost'].predict(self.X_val_sc)
+        p_rf = self.models['rf'].predict(self.X_val_sc)
+        with torch.no_grad():
+            t_val = torch.FloatTensor(self.X_val_sc).to(self.device)
+            p_mlp = self.models['mlp'](t_val).cpu().numpy()
+            
+        y_true = self.Y_val_sc
+        mse_xgb = mean_squared_error(y_true, p_xgb)
+        mse_rf = mean_squared_error(y_true, p_rf)
+        mse_mlp = mean_squared_error(y_true, p_mlp)
+        
+        total_inv = (1/(mse_xgb+1e-8)) + (1/(mse_rf+1e-8)) + (1/(mse_mlp+1e-8))
+        self.model_weights = {
+            'xgboost': (1/(mse_xgb+1e-8)) / total_inv,
+            'rf': (1/(mse_rf+1e-8)) / total_inv,
+            'mlp': (1/(mse_mlp+1e-8)) / total_inv
+        }
+
+    def _predict_ensemble(self, X_scaled):
+        p_xgb = self.models['xgboost'].predict(X_scaled)
+        p_rf = self.models['rf'].predict(X_scaled)
+        with torch.no_grad():
+            t_x = torch.FloatTensor(X_scaled).to(self.device)
+            p_mlp = self.models['mlp'](t_x).cpu().numpy()
+            
+        final_pred = (p_xgb * self.model_weights['xgboost'] + 
+                      p_rf * self.model_weights['rf'] + 
+                      p_mlp * self.model_weights['mlp'])
+        return final_pred
+
+    def _evaluate_ensemble(self):
+        y_pred_sc = self._predict_ensemble(self.X_test_sc)
+        y_pred = self.Y_scaler.inverse_transform(y_pred_sc)
+        
+        r2 = r2_score(self.Y_test, y_pred, multioutput='raw_values')
+        # Store R2 for Step Coverage for Hybrid Logic
+        try:
+            sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
+            self.sc_r2_score = max(0.0, min(1.0, r2[sc_idx])) # Clamp between 0 and 1
+        except:
+            self.sc_r2_score = 0.95 # Default fallback
+            
+        rmse = np.sqrt(mean_squared_error(self.Y_test, y_pred, multioutput='raw_values'))
+        mae = mean_absolute_error(self.Y_test, y_pred, multioutput='raw_values')
+        
+        y_mean = np.mean(self.Y_test, axis=0)
+        safe_mean = np.where(np.abs(y_mean) < 1e-6, 1e-6, y_mean)
+        rrmse = (rmse / np.abs(safe_mean)) * 100
+        
+        return pd.DataFrame({
+            'RMSE': dict(zip(self.all_output_cols, rmse.round(4))),
+            'MAE': dict(zip(self.all_output_cols, mae.round(4))),
+            'RRMSE (%)': dict(zip(self.all_output_cols, rrmse.round(2))),
+            'R2': dict(zip(self.all_output_cols, r2.round(4)))
+        })
+
+    # --------------------------------------------------------------------------
+    # Physics & Optimization Methods
+    # --------------------------------------------------------------------------
+    
+    @staticmethod
+    def _calc_physics(T_c, P_torr, pulse_s, AR, precursor, CD_m):
+        const = PRECURSOR_CONSTANTS.get(precursor, PRECURSOR_CONSTANTS["TMA"])
+        d, M = const["diameter_m"], const["mass_g_mol"] / 1000.0 / N_A
+        T_K, P_Pa = T_c + 273.15, P_torr * 133.322
+        L = AR * CD_m
+        
+        v_avg = np.sqrt(8 * k_B * T_K / (np.pi * M))
+        lambda_m = (k_B * T_K) / (np.sqrt(2) * np.pi * d**2 * P_Pa)
+        Kn = lambda_m / L
+        
+        D_eff = 1.0 / ((1/(1/3 * lambda_m * v_avg + 1e-30)) + (1/(1/3 * v_avg * CD_m + 1e-30)))
+        phi = L / (np.sqrt(D_eff * pulse_s + 1e-30) + 1e-30)
+        
+        sc = 1.0/(1.0+phi) if phi < 1.0 else np.exp(-phi)
+        mode = "Reaction Limited" if phi < 1.0 else "Diffusion Limited"
+        return float(np.clip(sc * 100, 0, 100)), lambda_m, Kn, phi, mode
+
+    def _predict_batch(self, df_input):
+        X_sc = self.X_scaler.transform(df_input.values)
+        Y_sc = self._predict_ensemble(X_sc)
+        Y_real = self.Y_scaler.inverse_transform(Y_sc)
+        return pd.DataFrame(Y_real, columns=self.all_output_cols)
+
+    def optimize(self, user_input):
+        pre, th = user_input["Precursor"], user_input["Thickness (nm)"]
+        co, purge = ('H2O' if pre in ['TMA', 'TDMAH'] else 'O3'), "N2"
+        ar = user_input["Target AR"]
+        cd_m = user_input["CD (nm)"] * 1e-9
+        
+        # Massive Batch Search
+        N = 50000
+        temps = np.random.uniform(150, 400, N)
+        press = np.random.uniform(0.01, 1.0, N)
+        pulses = np.random.uniform(0.05, 2.0, N)
+        purges = np.random.uniform(1.0, 10.0, N)
+        flows = np.random.uniform(50, 500, N)
+        
+        base_data = {col: 0.0 for col in self.all_input_cols}
+        if f"Precursor_{pre}" in base_data: base_data[f"Precursor_{pre}"] = 1.0
+        if f"Co-reactant_{co}" in base_data: base_data[f"Co-reactant_{co}"] = 1.0
+        if f"Purge Gas_{purge}" in base_data: base_data[f"Purge Gas_{purge}"] = 1.0
+        if "Aspect Ratio (AR)" in base_data: base_data["Aspect Ratio (AR)"] = ar
+
+        df_batch = pd.DataFrame([base_data] * N)
+        df_batch["Temperature (c)"] = temps
+        df_batch["Pressure (torr)"] = press
+        df_batch["Precursor_Pulse Time (s)"] = pulses
+        df_batch["Co-reactant_Pulse Time (s)"] = pulses
+        df_batch["Purge Time (s)"] = purges
+        df_batch["Purge Gas Flow Rate (cm3/min)"] = flows
+        
+        preds = self._predict_batch(df_batch[self.all_input_cols])
+        
+        gpcs = preds['GPC (A/cycle)'].values
+        roughness = preds['Surface Roughness (RMS, nm)'].values
+        uniformity = preds['Uniformity (%)'].values
+        sc_pred = preds['Step Coverage (sc, %)'].values # AI predicted SC
+        
+        est_cycles = th / (np.maximum(gpcs, 0.001))
+        est_th = gpcs * est_cycles
+        
+        sc_phys = []
+        for i in range(N):
+            s, _, _, _, _ = self._calc_physics(temps[i], press[i], pulses[i], ar, pre, cd_m)
+            sc_phys.append(s)
+        sc_phys = np.array(sc_phys)
+        
+        # HYBRID SC LOGIC: Final SC = R2 * AI + (1-R2) * Physics
+        r2 = getattr(self, 'sc_r2_score', 0.95)
+        sc_final = (r2 * sc_pred) + ((1 - r2) * sc_phys)
+        
+        # Cost Calculation
+        cost = (COST_WEIGHTS["roughness"] * roughness**2) + \
+               (COST_WEIGHTS["uniformity"] * uniformity**2) + \
+               (500 * (est_th - th)**2)
+        
+        # Penalty based on Hybrid SC (Not just Phys SC)
+        penalty = (sc_final < 90.0) * 1e9
+        total_cost = cost + penalty
+        
+        best_idx = np.argmin(total_cost)
+        best_row = df_batch.iloc[best_idx]
+        best_pred = preds.iloc[best_idx]
+        
+        # Update the best prediction with Hybrid SC value for reporting
+        best_pred_hybrid_sc = sc_final[best_idx]
+        
+        final_gpc = max(0.001, best_pred['GPC (A/cycle)'])
+        final_cycles = int(round(th / final_gpc))
+        
+        opt_recipe = {
+            "Precursor": pre, "Co-reactant": co, "Purge Gas": purge,
+            "Temperature (c)": round(best_row["Temperature (c)"], 2),
+            "Pressure (torr)": round(best_row["Pressure (torr)"], 3),
+            "Cycles (n)": final_cycles,
+            "Precursor Pulse Time (s)": round(best_row["Precursor_Pulse Time (s)"], 3),
+            "Co-reactant Pulse Time (s)": round(best_row["Co-reactant_Pulse Time (s)"], 3),
+            "Purge Time (s)": round(best_row["Purge Time (s)"], 2),
+            "Purge Gas Flow Rate (cm3/min)": round(best_row["Purge Gas Flow Rate (cm3/min)"], 0)
+        }
+        
+        final_pred_series = best_pred.copy()
+        final_pred_series['Thickness (nm)'] = final_gpc * final_cycles
+        final_pred_series['Step Coverage (sc, %)'] = best_pred_hybrid_sc # Report Hybrid SC
+        
+        sc_val_phys, lam, kn, phi, mode = self._calc_physics(
+            opt_recipe["Temperature (c)"], opt_recipe["Pressure (torr)"], 
+            opt_recipe["Precursor Pulse Time (s)"], ar, pre, cd_m
+        )
+        
+        phy_info = {
+            "Mean Free Path (λ)": f"{lam:.2e} m", 
+            "Knudsen": f"{kn:.2f}", 
+            "Thiele Modulus": f"{phi:.4f}", 
+            "Mode": mode, 
+            "Physics SC": f"{sc_val_phys:.2f}%",
+            "Hybrid SC": f"{best_pred_hybrid_sc:.2f}% (R2: {r2:.2f})" # Show Hybrid Info
+        }
+        
+        class Res: fun = total_cost[best_idx]
+        res = Res()
+        
+        return opt_recipe, final_pred_series, phy_info, res
+
+    def analyze_sensitivity(self, recipe, user_input, x_col, y_col):
+        norm_recipe = {k.replace(" ", "_"): v for k, v in recipe.items()}
+        norm_recipe.update(recipe)
+        
+        target_val = None
+        if x_col in norm_recipe: target_val = norm_recipe[x_col]
+        elif x_col.replace("_", " ") in recipe: target_val = recipe[x_col.replace("_", " ")]
+        
+        if target_val is None: return pd.DataFrame()
+            
+        if "Pulse Time" in x_col:
+            values = np.linspace(0.01, target_val * 1.5, 50)
+        else:
+            values = np.linspace(target_val * 0.7, target_val * 1.3, 50)
+        
+        batch_data = []
+        base_row = {col: 0.0 for col in self.all_input_cols}
+        pre, co, purge = user_input["Precursor"], recipe["Co-reactant"], recipe["Purge Gas"]
+        
+        for col, val in [("Precursor", pre), ("Co-reactant", co), ("Purge Gas", purge)]:
+            if f"{col}_{val}" in base_row: base_row[f"{col}_{val}"] = 1.0
+        if "Aspect Ratio (AR)" in base_row: base_row["Aspect Ratio (AR)"] = user_input["Target AR"]
+        
+        for k, v in recipe.items():
+            k_us = k.replace(" ", "_")
+            if k in base_row: base_row[k] = v
+            elif k_us in base_row: base_row[k_us] = v
+            if "Pulse Time" in k:
+                 k_special = k.replace("Pulse Time", "_Pulse Time")
+                 if k_special in base_row: base_row[k_special] = v
+
+        for v in values:
+            row = base_row.copy()
+            if x_col in row: row[x_col] = v
+            else:
+                x_col_alt = x_col.replace(" ", "_")
+                if x_col_alt in row: row[x_col_alt] = v
+            
+            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
+                 row["Precursor_Pulse Time (s)"] = v
+                 row["Co-reactant_Pulse Time (s)"] = v
+
+            batch_data.append(row)
+            
+        df_batch = pd.DataFrame(batch_data)
+        preds = self._predict_batch(df_batch[self.all_input_cols])
+        preds[x_col] = values
+        
+        sc_list = []
+        for i in range(len(values)):
+            row = df_batch.iloc[i]
+            t = row.get("Temperature (c)", recipe.get("Temperature (c)", 250))
+            p = row.get("Pressure (torr)", recipe.get("Pressure (torr)", 0.1))
+            
+            if "Pulse Time" in x_col or "Pulse_Time" in x_col:
+                pt = values[i]
+            else:
+                pt = recipe.get("Precursor Pulse Time (s)", 0.5)
+            
+            s, _, _, _, _ = self._calc_physics(t, p, pt, user_input["Target AR"], pre, user_input["CD (nm)"]*1e-9)
+            sc_list.append(s)
+        
+        preds['Physics SC (%)'] = sc_list
+        
+        # Apply Hybrid Logic if SC is the target column
+        if y_col == 'Step Coverage (sc, %)':
+            r2 = getattr(self, 'sc_r2_score', 0.95)
+            preds[y_col] = (r2 * preds[y_col]) + ((1 - r2) * np.array(sc_list))
+        
+        return preds
+
+    def get_shap(self):
+        try: sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
+        except: sc_idx = 0
+        model = self.models['xgboost'].estimators_[sc_idx]
+        explainer = shap.TreeExplainer(model)
+        shap_vals = explainer.shap_values(self.X_test_sc)
+        return explainer, shap_vals, self.X_test_sc, self.all_input_cols
+
+# ------------------------------------------------------------------------------
+# 4. Streamlit GUI
+# ------------------------------------------------------------------------------
+
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
-    st.title("✨ AI 기반 ALD 공정 최적화 시스템")
-
-    @st.cache_resource(show_spinner="AI 모델 및 데이터 준비 중 (초기 1회만 실행)...")
-    def load_optimizer(): 
-        csv_file_name = "AI_ALD1.csv"
+    
+    # [CSS Injection] - Ultimate Visibility & Design Restore
+    st.markdown(
+        """
+        <style>
+        /* 1. Force White Background */
+        .stApp { background-color: #ffffff !important; }
         
-        # [수정됨] 파일 경로를 스크립트 실행 위치(현재 폴더) 기준으로 변경
-        # 이렇게 하면 로컬 컴퓨터와 Streamlit Cloud 서버 양쪽에서 모두 작동합니다.
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        full_file_path = os.path.join(current_dir, csv_file_name)
+        /* 2. Force ALL text to black */
+        body, p, div, span, label, h1, h2, h3, h4, h5, h6, td, th, li {
+            color: #000000 !important;
+        }
+        
+        /* 3. Input Fields */
+        .stSelectbox label, .stNumberInput label {
+            color: #000000 !important;
+            font-size: 1rem !important;
+            font-weight: 700 !important;
+        }
+        div[data-baseweb="select"] > div, .stNumberInput input {
+            background-color: #f0f2f6 !important;
+            color: #000000 !important;
+            border: 1px solid #cccccc !important;
+        }
+        
+        /* 4. Expander Header Fix */
+        div[data-testid="stExpander"] details summary {
+            background-color: #f0f2f6 !important;
+            color: #000000 !important;
+        }
+        div[data-testid="stExpander"] details summary span {
+             color: #000000 !important;
+        }
+        .streamlit-expanderHeader {
+            color: #000000 !important;
+            background-color: #f0f2f6 !important;
+        }
+        
+        /* 5. Buttons */
+        div.stButton > button:first-child {
+            background-color: #FF4B4B !important; /* Orange Red */
+            color: #ffffff !important;
+            border: none !important;
+            font-weight: bold !important;
+        }
+        [data-testid="stSidebar"] div.stButton > button:first-child {
+            background-color: #4CAF50 !important; /* Green */
+            color: #ffffff !important;
+        }
+        
+        /* 6. Status Text */
+        h4 { color: #0068c9 !important; }
+        
+        /* 7. Cover Box - Original Design Restored */
+        .block-container { padding-top: 60px !important; }
+        .cover-box {
+            border-radius: 24px;
+            padding: 24px 32px;
+            margin-bottom: 24px;
+            margin-top: 10px;
+            background: linear-gradient(135deg, #dff3ff 0%, #ffffff 50%, #f5fff7 100%);
+            box-shadow: 0 6px 14px rgba(0,0,0,0.06);
+        }
+        .cover-badge {
+            display: inline-block; padding: 8px 20px; border-radius: 999px;
+            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 13px;
+            margin-bottom: 8px; margin-left: -12px;
+        }
+        header {visibility: hidden;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        # 경로 문제 발생 시 대비책
-        if not os.path.exists(full_file_path):
-            full_file_path = csv_file_name 
+    st.markdown(
+        """
+        <div class="cover-box">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div>
+                    <div class="cover-badge">2025 제1회 Google-아주대학교</div>
+                    <div style="font-size: 28px; font-weight: 800; color: #111111; margin: 4px 0 10px 0;">AI 기반 ALD 공정 최적화 시스템</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #222222;">AI 융합 캡스톤 디자인 대회</div>
+                    <div style="font-size: 14px; font-weight: 600; color: #333333;">최종성과발표회</div>
+                </div>
+                <div style="text-align: right;">
+                    <div style="line-height: 1.3; margin-bottom: 6px; font-size: 12px; color: #444444;">Google Developer Student Clubs<br>Ajou University</div>
+                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png" style="height:35px;">
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    status_container = st.empty()
+    progress_container = st.empty()
 
-        if not os.path.exists(full_file_path):
-            st.error(f"❌ 데이터 파일 '{csv_file_name}'을(를) 찾을 수 없습니다.")
-            st.warning(f"현재 탐색 경로: **{full_file_path}**")
-            st.info("💡 해결법: 'AI_ALD1.csv' 파일을 이 파이썬 코드와 같은 폴더에 업로드해주세요.")
+    if 'optimizer' not in st.session_state:
+        # Manual instantiation for first run (shows progress)
+        csv = "AI_ALD1.csv"
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
+        if not os.path.exists(path): path = csv
+        
+        if os.path.exists(path):
+            # Direct call without cache to show progress
+            opt = ALDOptimizer(path, mode="gui")
+            st.session_state['optimizer'] = opt
+            
+            progress_container.empty()
+            status_container.success("✅ AI 모델 학습 완료! (Physics-Informed Ensemble)")
+        else:
+            st.error("❌ 데이터 파일 'AI_ALD1.csv'을(를) 찾을 수 없습니다.")
             st.stop()
+    
+    with st.expander("🎯 공정 목표 설정 (펼치기/접기)", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            pre = st.selectbox("전구체 (Precursor)", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"])
+            th = st.number_input("목표 두께 (nm)", 1.0, 200.0, 10.0)
+        with c2:
+            ar = st.number_input("Target AR (종횡비)", 1.0, 100.0, 10.0)
+            cd = st.number_input("CD (nm)", 1.0, 500.0, 100.0)
             
-        return ALDOptimizer(file_path=full_file_path, mode="gui") 
+        if st.button("🚀 최적 레시피 도출", use_container_width=True):
+            user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
+            optimizer = st.session_state['optimizer']
+            # No spinner here either
+            recipe, pred, phy, res = optimizer.optimize(user_input)
+            st.session_state.res = (recipe, pred, phy, res, user_input)
 
-    try: 
-        optimizer = load_optimizer()
-    except Exception as e: 
-        st.error(f"모델 로드/학습 실패: {e}")
-        st.stop()
+    if st.sidebar.button("🔄 AI 모델 재학습 (Reset)"):
+        st.session_state.pop('optimizer', None)
+        st.rerun()
 
-    st.sidebar.header("🎯 목표 조건 입력")
-    sel_p = st.sidebar.selectbox("전구체 선택", ["TMA", "TDMAH", "TEMAHf", "Zr(NEt2)4"], key='precursor_select')
-    th = st.sidebar.number_input("목표 두께 (nm)", 1.0, 200.0, 15.0, key='thickness_input')
-    ar = st.sidebar.number_input("목표 AR (Aspect Ratio)", 1.0, 100.0, 10.0, key='ar_input')
-    cd = st.sidebar.number_input("CD (Critical Dimension, nm)", 1.0, 500.0, 100.0, key='cd_input')
-
-    if 'opt_result' not in st.session_state:
-        st.session_state.opt_result = None
-
-    if st.sidebar.button("🚀 최적 레시피 생성", type="primary"):
-        user_input = {"Precursor": sel_p, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
+    if 'res' in st.session_state:
+        optimizer = st.session_state['optimizer']
+        recipe, pred, phy, res, u_in = st.session_state.res
         
-        with st.spinner("최적화 진행 중 (SLSQP)..."):
-            opt_recipe, pred_results, val_data, opt_stats = optimizer.generate_optimal_recipe(user_input=user_input)
-            st.session_state.opt_result = (opt_recipe, pred_results, val_data, opt_stats, user_input)
+        t1, t2, t3 = st.tabs(["📄 최적 레시피 리포트", "📊 공정 민감도 분석", "🔍 XAI 해석"])
         
-        st.sidebar.success("✅ 최적화 완료!")
-        
-    if st.session_state.opt_result:
-        opt_recipe, pred_results, val_data, opt_stats, user_input = st.session_state.opt_result
-        
-        tab1, tab2 = st.tabs(["📄 결과 리포트", "📊 최적화 경향 분석"])
+        with t1:
+            st.markdown("#### 🏆 AI 모델 성능 (Ensemble Test Result)")
+            st.dataframe(optimizer.performance_df, use_container_width=True)
 
-        with tab1:
-            st.subheader("모델 선택 근거 및 성능 평가")
-            
-            col_perf1, col_perf2 = st.columns([1, 2])
-            with col_perf1:
-                st.markdown("##### 1) 모델 선택 근거 (MLP vs Random Forest)")
-                comp_df = pd.DataFrame(optimizer.model_comparison_results).T
-                comp_df.index.name = "Model"
-                st.dataframe(comp_df, use_container_width=True)
-                st.caption("MLP는 RF 대비 높은 확장성과 미분 가능성을 제공합니다.")
-
-            with col_perf2:
-                st.markdown("##### 2) MLP 최종 Test Set 성능 지표")
-                st.dataframe(optimizer.performance_df, use_container_width=True)
-                st.caption("RRMSE(%)는 상대 오차율을 나타냅니다. 핵심 물성(GPC, Roughness, SC)은 낮은 오차율을 보입니다.")
-
-            st.divider()
-
-            st.subheader(f"💡 AI 최적 레시피 (목표 두께: {user_input['Thickness (nm)']:.1f} nm)")
-            c1, c2, c3 = st.columns([1, 1, 1])
+            c1, c2 = st.columns(2)
             with c1:
-                st.markdown("##### 레시피 파라미터")
-                recipe_df = pd.DataFrame.from_dict({k: opt_recipe[k] for k in ['Cycles (n)', 'Temperature (c)', 'Pressure (torr)', 'Precursor Pulse Time (s)', 'Purge Time (s)', 'Purge Gas Flow Rate (cm3/min)']}, orient='index', columns=['Value'])
-                st.dataframe(recipe_df, use_container_width=True)
-            
+                st.markdown("### 🧪 도출된 공정 레시피")
+                st.dataframe(pd.DataFrame.from_dict(recipe, orient='index', columns=['Value']), use_container_width=True)
+                st.success(f"최적화 비용 함수 값: {res.fun:.4f}")
             with c2:
-                st.markdown("##### 예측 물성 결과")
-                st.metric("최종 예측 두께 (nm)", f"{pred_results['Thickness (nm)']:.4f}", delta=f"{pred_results['Thickness (nm)'] - user_input['Thickness (nm)']:.4f} (nm)")
-                st.dataframe(pred_results.to_frame(name='Predicted').drop('Thickness (nm)'), use_container_width=True)
+                st.markdown("### 🔮 AI 예측 물성")
+                pred_disp = pred.to_frame(name='Predicted')
+                target_th = u_in['Thickness (nm)']
+                pred_th = pred['Thickness (nm)']
+                st.metric("Thickness (nm)", f"{pred_th:.4f}", f"{pred_th - target_th:.4f}")
+                st.dataframe(pred_disp.drop('Thickness (nm)'), use_container_width=True)
                 
-            with c3:
-                st.markdown("##### 물리/최적화 검증")
-                st.dataframe(pd.DataFrame.from_dict(val_data, orient='index', columns=['Value']), use_container_width=True)
-                st.caption(f"최종 비용: {opt_stats['Final Cost']}")
+            st.markdown("### ⚛️ 물리 모델 검증 (Physics Check)")
+            st.info(f"Step Coverage: {phy['Physics SC']} ({phy['Mode']}) | Knudsen Number: {phy['Knudsen']} | Hybrid SC: {phy.get('Hybrid SC', 'N/A')}")
+
+        with t2:
+            st.markdown("### 📈 Sensitivity Analysis (민감도 분석)")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            opts = {
+                "GPC vs Temperature": ("Temperature (c)", "GPC (A/cycle)"),
+                "GPC vs Pulse Time": ("Precursor_Pulse Time (s)", "GPC (A/cycle)"),
+                "SC vs Pulse Time": ("Precursor_Pulse Time (s)", "Step Coverage (sc, %)"),
+                "GPC vs Pressure": ("Pressure (torr)", "GPC (A/cycle)")
+            }
+            choice = st.selectbox("분석할 관계 선택:", list(opts.keys()))
+            xk, yk = opts[choice]
+            
+            df_sens = optimizer.analyze_sensitivity(recipe, u_in, xk, yk)
+            
+            if not df_sens.empty:
+                fig, ax = plt.subplots(figsize=(10, 5))
                 
+                y_smooth = gaussian_filter1d(df_sens[yk], sigma=1.5)
+                f_interp = interp1d(df_sens[xk], y_smooth, kind='linear', fill_value="extrapolate")
+                
+                opt_x = recipe.get(xk)
+                if opt_x is None:
+                    xk_fix = xk.replace("_", " ")
+                    if xk_fix in recipe: opt_x = recipe[xk_fix]
 
-        with tab2:
-            st.header("📊 최적 공정 경향 분석")
-            st.info("선택된 목표 변수를 변경할 때, 최적화 시스템이 다른 파라미터를 조정하는 경향을 보여줍니다.")
-            
-            col_sel1, col_sel2, col_sel3 = st.columns(3)
-            with col_sel1:
-                target_param = st.selectbox("1. X축: 목표값", ["Thickness (nm)", "Target AR"], key='sweep_x_select', index=0 if 'Thickness (nm)' in user_input else 1)
-            with col_sel2:
-                y_left = st.selectbox("2. 왼쪽 Y축: 공정 조건 (Recipe)", ["Temperature (c)", "Pressure (torr)", "Precursor Pulse Time (s)", "Purge Time (s)", "Cycles (n)"], key='sweep_yl_select')
-            with col_sel3:
-                y_right = st.selectbox("3. 오른쪽 Y축: 예측 물성 (Property)", ["GPC (A/cycle)", "Step Coverage (sc, %)", "Surface Roughness (RMS, nm)", "Uniformity (%)"], key='sweep_yr_select')
+                sns.lineplot(x=df_sens[xk], y=y_smooth, marker=None, ax=ax, label='AI Trend (Smoothed)', color='#1f77b4', linewidth=2)
+                ax.scatter(df_sens[xk], df_sens[yk], color='gray', alpha=0.3, s=10)
+                
+                if opt_x is not None:
+                    opt_y_visual = f_interp(opt_x)
+                    ax.scatter([opt_x], [opt_y_visual], color='red', s=150, zorder=5, label='Optimal')
+                
+                ymin, ymax = df_sens[yk].min(), df_sens[yk].max()
+                if ymax - ymin < 1e-4:
+                    ax.set_ylim(ymin - 0.0001, ymax + 0.0001)
+                
+                ax.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+                st.pyplot(fig)
+                
+                if 'Step Coverage (sc, %)' in df_sens.columns:
+                    st.markdown("#### ⚖️ Step Coverage Verification (AI vs Physics)")
+                    fig2, ax2 = plt.subplots(figsize=(10, 4))
+                    
+                    sc_smooth = gaussian_filter1d(df_sens['Step Coverage (sc, %)'], sigma=1.5)
+                    sns.lineplot(x=df_sens[xk], y=sc_smooth, marker=None, ax=ax2, label='AI (Smoothed)', color='#1f77b4')
+                    sns.lineplot(data=df_sens, x=xk, y='Physics SC (%)', marker='x', linestyle='--', ax=ax2, label='Physics', color='red')
+                    
+                    sc_min = min(df_sens['Step Coverage (sc, %)'].min(), df_sens['Physics SC (%)'].min())
+                    sc_max = max(df_sens['Step Coverage (sc, %)'].max(), df_sens['Physics SC (%)'].max())
+                    margin = (sc_max - sc_min) * 0.1 if sc_max != sc_min else 1.0
+                    ax2.set_ylim(max(0, sc_min - margin), min(100.5, sc_max + margin))
+                    
+                    ax2.set_ylabel("Step Coverage (%)")
+                    ax2.grid(True, alpha=0.3)
+                    ax2.legend()
+                    st.pyplot(fig2)
 
-            current_val = user_input[target_param]
-            sweep_range = np.linspace(current_val * 0.5, current_val * 1.5, 10) 
-            
-            with st.spinner(f"'{target_param}' 변화에 따른 최적화 경향 시뮬레이션 중..."):
-                sweep_df = optimizer.simulate_target_sweep(user_input, target_param, sweep_range)
+        with t3:
+            st.markdown("### 🧠 Explainable AI (SHAP)")
+            if st.button("SHAP 분석 시작"):
+                exp, vals, X_test, feats = optimizer.get_shap()
+                fig, ax = plt.subplots()
+                shap.summary_plot(vals, X_test, feature_names=feats, show=False)
+                st.pyplot(fig)
 
-            # --- Graph 1: Dual Axis Trend (공정 조건 vs 물성) ---
-            fig, ax1 = plt.subplots(figsize=(10, 5))
-            line1 = ax1.plot(sweep_df[target_param], sweep_df[y_left], 'r-o', label=f"Recipe: {y_left}")
-            ax1.set_xlabel(f"Target {target_param}"); ax1.set_ylabel(f"Optimal {y_left}", color='r'); ax1.tick_params(axis='y', labelcolor='r'); ax1.grid(True, linestyle='--', alpha=0.5)
-            
-            ax2 = ax1.twinx()
-            line2 = ax2.plot(sweep_df[target_param], sweep_df[y_right], 'b--s', label=f"Predicted: {y_right}")
-            ax2.set_ylabel(f"Predicted {y_right}", color='b'); ax2.tick_params(axis='y', labelcolor='b')
-
-            lines = line1 + line2; labels = [l.get_label() for l in lines]
-            ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
-            plt.title(f"Optimization Trend: {y_left} vs {y_right}")
-            st.pyplot(fig)
-
-            # --- Graph 2: SC Trend Comparison (AI 예측 vs 물리 모델) ---
-            st.divider()
-            st.subheader(f"⚖️ Step Coverage Trend: AI Prediction vs Physics Model")
-            
-            fig2, ax_sc = plt.subplots(figsize=(10, 4))
-            ax_sc.plot(sweep_df[target_param], sweep_df['Step Coverage (sc, %)'], 'g-^', label='AI Prediction (Data)')
-            ax_sc.plot(sweep_df[target_param], sweep_df['Physics SC (%)'], 'k--x', label='Physics Model (Constraint)')
-            ax_sc.set_xlabel(f"Target {target_param}"); ax_sc.set_ylabel("Step Coverage (%)"); ax_sc.set_ylim(0, 110)
-            ax_sc.legend(); ax_sc.grid(True, linestyle='--', alpha=0.5)
-            plt.title(f"SC Reliability Check vs {target_param}")
-            st.pyplot(fig2)
-
-
-# ==========================================
-# 🚦 실행 모드 자동 감지 (Streamlit 실행)
-# ==========================================
 if __name__ == "__main__":
     main_gui()
