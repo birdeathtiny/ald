@@ -2,13 +2,11 @@
 # 3D 반도체 소자 구현을 위한 ALD 공정 설계 및 AI 최적화 시스템
 # (AI-Driven ALD Process Optimization System)
 # 
-# [Final Version vFinal_Hybrid: R2 Weighted Hybrid SC Model]
-# 1. Hybrid Logic Applied:
-#    - Final SC = (R2 * AI_SC) + ((1 - R2) * Phys_SC)
-#    - R2 score represents the confidence of the AI model.
-#    - Remaining uncertainty is compensated by the ideal Physical model.
+# [Final Version v30: Explicit Separation of AI vs Hybrid SC]
+# 1. Logic Update: Distinctly separate 'Raw AI Prediction' and 'Hybrid Corrected Value'.
+#    -> Displays AI SC, Physics SC, and Final Hybrid SC separately in the report.
 # 2. Parameters Locked: XGB(175), RF(130), MLP(100/256).
-# 3. UI/UX: All visibility & mobile fixes included.
+# 3. UI/UX: White Theme, Black Text, Colored Buttons, Mobile Optimization.
 # ==============================================================================
 
 import streamlit as st
@@ -50,8 +48,6 @@ torch.set_num_threads(1)
 import platform
 from matplotlib import font_manager, rc
 plt.rcParams['axes.unicode_minus'] = False
-
-# 폰트 설정
 if platform.system() == 'Darwin':
     rc('font', family='AppleGothic')
 elif platform.system() == 'Windows':
@@ -90,7 +86,6 @@ class ALDRegressor(nn.Module):
             nn.Linear(input_size, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.Dropout(0.1),
             
             nn.Linear(64, 32),
             nn.BatchNorm1d(32),
@@ -122,11 +117,11 @@ class ALDOptimizer:
         
         # [LOCKED PARAMETERS]
         self.learning_rate = 0.01 
-        self.batch_size = 256       # Full Batch (Speed Hack)
-        self.epochs = 100           # Locked: 100
+        self.batch_size = 256       # Full Batch Speed Hack
+        self.epochs = 100           # Locked 100
         self.best_model_path = 'best_ald_mlp_model.pth'
         self.default_gpc_guess = 1.0 
-        self.sc_r2_score = 0.95     # Default R2 score (will be updated after training)
+        self.sc_r2_score = 0.95     # Default R2
         
         self.models = {'mlp': None, 'xgboost': None, 'rf': None}
         self.model_weights = {'mlp': 0.33, 'xgboost': 0.33, 'rf': 0.33}
@@ -140,10 +135,9 @@ class ALDOptimizer:
         self.all_input_cols = []
         self.all_output_cols = []
         
-        # UI Placeholders (Internal handling)
+        # UI Placeholders
         self.status_container = None
         self.progress_bar = None
-        
         if self.mode == 'gui':
             self.status_container = st.empty()
             self.progress_bar = st.progress(0)
@@ -159,7 +153,6 @@ class ALDOptimizer:
         self._update_ui(1.0, "학습 완료! 시스템 준비됨.")
         time.sleep(0.5)
         
-        # Clear UI elements
         if self.mode == 'gui':
             self.status_container.empty()
             self.progress_bar.empty()
@@ -299,19 +292,19 @@ class ALDOptimizer:
         return np.vstack(X_aug), np.vstack(Y_aug)
 
     def _train_ensemble_models(self):
-        # 1. XGBoost (175 Trees)
+        # 1. XGBoost (175 Trees) - LOCKED
         self._update_ui(0.2, "XGBoost (175 Trees) 학습 중... [1/3]")
         xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=175, learning_rate=0.05, max_depth=6, n_jobs=-1)
         self.models['xgboost'] = MultiOutputRegressor(xgb_model)
         self.models['xgboost'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 2. Random Forest (130 Trees)
+        # 2. Random Forest (130 Trees) - LOCKED
         self._update_ui(0.5, "Random Forest (130 Trees) 학습 중... [2/3]")
         rf_model = RandomForestRegressor(n_estimators=130, max_depth=None, random_state=42, n_jobs=-1)
         self.models['rf'] = rf_model
         self.models['rf'].fit(self.X_train_sc, self.Y_train_sc)
         
-        # 3. PyTorch MLP (100 Epochs)
+        # 3. PyTorch MLP (100 Epochs, Batch 256) - LOCKED & FAST
         self._update_ui(0.75, "Deep Learning (100 Epochs) 학습 중... [3/3]")
         self._train_pytorch_mlp()
         
@@ -329,7 +322,6 @@ class ALDOptimizer:
         
         self.models['mlp'] = ALDRegressor(self.input_dim, self.output_dim).to(self.device)
         optimizer = optim.Adam(self.models['mlp'].parameters(), lr=self.learning_rate, weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
         
         loss_weights = torch.ones(self.output_dim).to(self.device)
         try:
@@ -389,13 +381,14 @@ class ALDOptimizer:
         y_pred = self.Y_scaler.inverse_transform(y_pred_sc)
         
         r2 = r2_score(self.Y_test, y_pred, multioutput='raw_values')
-        # Store R2 for Step Coverage for Hybrid Logic
+        
+        # [Capture R2 Score for SC]
         try:
             sc_idx = self.all_output_cols.index('Step Coverage (sc, %)')
-            self.sc_r2_score = max(0.0, min(1.0, r2[sc_idx])) # Clamp between 0 and 1
+            self.sc_r2_score = max(0.0, min(1.0, r2[sc_idx]))
         except:
-            self.sc_r2_score = 0.95 # Default fallback
-            
+            self.sc_r2_score = 0.95
+
         rmse = np.sqrt(mean_squared_error(self.Y_test, y_pred, multioutput='raw_values'))
         mae = mean_absolute_error(self.Y_test, y_pred, multioutput='raw_values')
         
@@ -471,36 +464,35 @@ class ALDOptimizer:
         gpcs = preds['GPC (A/cycle)'].values
         roughness = preds['Surface Roughness (RMS, nm)'].values
         uniformity = preds['Uniformity (%)'].values
-        sc_pred = preds['Step Coverage (sc, %)'].values # AI predicted SC
+        
+        # [RAW AI PREDICTION]
+        sc_pred_ai = preds['Step Coverage (sc, %)'].values
         
         est_cycles = th / (np.maximum(gpcs, 0.001))
         est_th = gpcs * est_cycles
         
+        # [PHYSICS CALCULATION]
         sc_phys = []
         for i in range(N):
             s, _, _, _, _ = self._calc_physics(temps[i], press[i], pulses[i], ar, pre, cd_m)
             sc_phys.append(s)
         sc_phys = np.array(sc_phys)
         
-        # HYBRID SC LOGIC: Final SC = R2 * AI + (1-R2) * Physics
+        # [HYBRID CALCULATION]
         r2 = getattr(self, 'sc_r2_score', 0.95)
-        sc_final = (r2 * sc_pred) + ((1 - r2) * sc_phys)
+        sc_hybrid = (r2 * sc_pred_ai) + ((1 - r2) * sc_phys)
         
-        # Cost Calculation
         cost = (COST_WEIGHTS["roughness"] * roughness**2) + \
                (COST_WEIGHTS["uniformity"] * uniformity**2) + \
                (500 * (est_th - th)**2)
         
-        # Penalty based on Hybrid SC (Not just Phys SC)
-        penalty = (sc_final < 90.0) * 1e9
+        # Penalty based on Hybrid Value
+        penalty = (sc_hybrid < 90.0) * 1e9
         total_cost = cost + penalty
         
         best_idx = np.argmin(total_cost)
         best_row = df_batch.iloc[best_idx]
         best_pred = preds.iloc[best_idx]
-        
-        # Update the best prediction with Hybrid SC value for reporting
-        best_pred_hybrid_sc = sc_final[best_idx]
         
         final_gpc = max(0.001, best_pred['GPC (A/cycle)'])
         final_cycles = int(round(th / final_gpc))
@@ -518,7 +510,11 @@ class ALDOptimizer:
         
         final_pred_series = best_pred.copy()
         final_pred_series['Thickness (nm)'] = final_gpc * final_cycles
-        final_pred_series['Step Coverage (sc, %)'] = best_pred_hybrid_sc # Report Hybrid SC
+        
+        # [EXPLICIT SEPARATION IN OUTPUT]
+        final_pred_series['AI Step Coverage (%)'] = sc_pred_ai[best_idx] # Raw AI
+        final_pred_series['Final Hybrid SC (%)'] = sc_hybrid[best_idx] # Hybrid
+        final_pred_series = final_pred_series.drop(labels=['Step Coverage (sc, %)']) # Remove ambiguous col
         
         sc_val_phys, lam, kn, phi, mode = self._calc_physics(
             opt_recipe["Temperature (c)"], opt_recipe["Pressure (torr)"], 
@@ -531,7 +527,7 @@ class ALDOptimizer:
             "Thiele Modulus": f"{phi:.4f}", 
             "Mode": mode, 
             "Physics SC": f"{sc_val_phys:.2f}%",
-            "Hybrid SC": f"{best_pred_hybrid_sc:.2f}% (R2: {r2:.2f})" # Show Hybrid Info
+            "Hybrid SC": f"{sc_hybrid[best_idx]:.2f}% (R2: {r2:.2f})"
         }
         
         class Res: fun = total_cost[best_idx]
@@ -603,7 +599,7 @@ class ALDOptimizer:
         
         preds['Physics SC (%)'] = sc_list
         
-        # Apply Hybrid Logic if SC is the target column
+        # Apply Hybrid Logic for graph
         if y_col == 'Step Coverage (sc, %)':
             r2 = getattr(self, 'sc_r2_score', 0.95)
             preds[y_col] = (r2 * preds[y_col]) + ((1 - r2) * np.array(sc_list))
@@ -625,19 +621,18 @@ class ALDOptimizer:
 def main_gui():
     st.set_page_config(page_title="AI 기반 ALD 공정 최적화", layout="wide")
     
-    # [CSS Injection] - Ultimate Visibility & Design Restore
+    # [CSS Injection] Force Text Visibility & Layout
     st.markdown(
         """
         <style>
-        /* 1. Force White Background */
-        .stApp { background-color: #ffffff !important; }
+        .stApp { background: #ffffff; }
         
-        /* 2. Force ALL text to black */
+        /* Force ALL text to black */
         body, p, div, span, label, h1, h2, h3, h4, h5, h6, td, th, li {
             color: #000000 !important;
         }
         
-        /* 3. Input Fields */
+        /* Input Fields */
         .stSelectbox label, .stNumberInput label {
             color: #000000 !important;
             font-size: 1rem !important;
@@ -649,7 +644,7 @@ def main_gui():
             border: 1px solid #cccccc !important;
         }
         
-        /* 4. Expander Header Fix */
+        /* Expander Header Visibility */
         div[data-testid="stExpander"] details summary {
             background-color: #f0f2f6 !important;
             color: #000000 !important;
@@ -662,7 +657,12 @@ def main_gui():
             background-color: #f0f2f6 !important;
         }
         
-        /* 5. Buttons */
+        /* Status Text (Blue) */
+        h4 {
+            color: #0068c9 !important;
+        }
+        
+        /* Buttons */
         div.stButton > button:first-child {
             background-color: #FF4B4B !important; /* Orange Red */
             color: #ffffff !important;
@@ -673,12 +673,10 @@ def main_gui():
             background-color: #4CAF50 !important; /* Green */
             color: #ffffff !important;
         }
+
+        .block-container { padding-top: 60px !important; padding-bottom: 40px; max-width: 1350px; }
         
-        /* 6. Status Text */
-        h4 { color: #0068c9 !important; }
-        
-        /* 7. Cover Box - Original Design Restored */
-        .block-container { padding-top: 60px !important; }
+        /* Cover Box */
         .cover-box {
             border-radius: 24px;
             padding: 24px 32px;
@@ -688,9 +686,9 @@ def main_gui():
             box-shadow: 0 6px 14px rgba(0,0,0,0.06);
         }
         .cover-badge {
-            display: inline-block; padding: 8px 20px; border-radius: 999px;
-            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 13px;
-            margin-bottom: 8px; margin-left: -12px;
+            display: inline-block; padding: 10px 24px; border-radius: 999px;
+            background: #e5f9e8; color: #176a3a; font-weight: 700; font-size: 14px;
+            margin-bottom: 10px; margin-left: -12px;
         }
         header {visibility: hidden;}
         </style>
@@ -704,13 +702,13 @@ def main_gui():
             <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                 <div>
                     <div class="cover-badge">2025 제1회 Google-아주대학교</div>
-                    <div style="font-size: 28px; font-weight: 800; color: #111111; margin: 4px 0 10px 0;">AI 기반 ALD 공정 최적화 시스템</div>
-                    <div style="font-size: 16px; font-weight: 700; color: #222222;">AI 융합 캡스톤 디자인 대회</div>
-                    <div style="font-size: 14px; font-weight: 600; color: #333333;">최종성과발표회</div>
+                    <div style="font-size: 32px; font-weight: 800; color: #111111; margin: 4px 0 10px 0;">AI 기반 ALD 공정 최적화 시스템</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #222222;">AI 융합 캡스톤 디자인 대회</div>
+                    <div style="font-size: 16px; font-weight: 600; color: #333333;">최종성과발표회</div>
                 </div>
                 <div style="text-align: right;">
-                    <div style="line-height: 1.3; margin-bottom: 6px; font-size: 12px; color: #444444;">Google Developer Student Clubs<br>Ajou University</div>
-                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png" style="height:35px;">
+                    <div style="line-height: 1.3; margin-bottom: 6px; font-size: 13px; color: #444444;">Google Developer Student Clubs<br>Ajou University</div>
+                    <img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png" style="height:40px;">
                 </div>
             </div>
         </div>
@@ -722,13 +720,12 @@ def main_gui():
     progress_container = st.empty()
 
     if 'optimizer' not in st.session_state:
-        # Manual instantiation for first run (shows progress)
+        # Manual instantiation for first run to show progress
         csv = "AI_ALD1.csv"
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv)
         if not os.path.exists(path): path = csv
         
         if os.path.exists(path):
-            # Direct call without cache to show progress
             opt = ALDOptimizer(path, mode="gui")
             st.session_state['optimizer'] = opt
             
@@ -750,7 +747,7 @@ def main_gui():
         if st.button("🚀 최적 레시피 도출", use_container_width=True):
             user_input = {"Precursor": pre, "Thickness (nm)": th, "Target AR": ar, "CD (nm)": cd}
             optimizer = st.session_state['optimizer']
-            # No spinner here either
+            # No spinner - direct call
             recipe, pred, phy, res = optimizer.optimize(user_input)
             st.session_state.res = (recipe, pred, phy, res, user_input)
 
@@ -779,10 +776,11 @@ def main_gui():
                 target_th = u_in['Thickness (nm)']
                 pred_th = pred['Thickness (nm)']
                 st.metric("Thickness (nm)", f"{pred_th:.4f}", f"{pred_th - target_th:.4f}")
+                # [VISIBILITY FIX] Show the separated SC values clearly
                 st.dataframe(pred_disp.drop('Thickness (nm)'), use_container_width=True)
                 
             st.markdown("### ⚛️ 물리 모델 검증 (Physics Check)")
-            st.info(f"Step Coverage: {phy['Physics SC']} ({phy['Mode']}) | Knudsen Number: {phy['Knudsen']} | Hybrid SC: {phy.get('Hybrid SC', 'N/A')}")
+            st.info(f"Physics SC: {phy['Physics SC']} ({phy['Mode']}) | Hybrid SC: {phy['Hybrid SC']} (Used for Final Decision)")
 
         with t2:
             st.markdown("### 📈 Sensitivity Analysis (민감도 분석)")
